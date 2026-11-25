@@ -139,6 +139,8 @@ describe('GuardCore actions', () => {
 - { id: b, tool: shell, match: { command: 'rm -rf' }, action: block, message: no deletes }
 - { id: a, tool: shell, match: { command: deploy }, action: ask, message: confirm deploy }
 - { id: w, tool: shell, match: { command: 'npm publish' }, action: warn, message: check the version }
+- { id: ob, tool: shell, match: { command: canary-block }, action: warn, promote_to: block, message: canary is blocked }
+- { id: oa, tool: shell, match: { command: canary-ask }, action: warn, promote_to: ask, message: canary needs approval }
 - { id: r, when: post_tool, action: redact, match: { output: 'sk-[a-z0-9]{8,}' } }
 - { id: pb, when: post_tool, tool: read, action: block, match: { output: 'BEGIN PRIVATE' }, message: private key in output }
 `
@@ -148,6 +150,15 @@ describe('GuardCore actions', () => {
     const log = join(root, 'log.jsonl')
     return { core: new GuardCore({ packs: [join(root, 'r.yaml')], userDir: '', cwd: root, logPath: log, ...extra }), log }
   }
+
+  it('words observe-mode notices as allowed calls with the promoted action', async () => {
+    const { core: guard } = await core()
+    const block = await guard.pre({ tool: 'bash', input: { command: 'canary-block' } })
+    assert.equal(block.kind, 'allow')
+    assert.deepEqual(block.warnings, ['dsh-guard observe [ob]: this call was allowed; once enforced the rule would block it: canary is blocked'])
+    const ask = await guard.pre({ tool: 'bash', input: { command: 'canary-ask' } })
+    assert.deepEqual(ask.warnings, ['dsh-guard observe [oa]: this call was allowed; once enforced the rule would ask for confirmation: canary needs approval'])
+  })
 
   it('denies, asks, warns and allows', async () => {
     const { core: guard, log } = await core()

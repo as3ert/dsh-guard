@@ -191,7 +191,7 @@ describe('guard_apply', () => {
     // The running core sees the new rule at once: a matching call now warns.
     const outcome = await core.pre({ tool: 'bash', input: { command: 'npm publish' }, cwd })
     assert.equal(outcome.kind, 'allow')
-    assert.match(outcome.warnings.join('\n'), /\[team\.npm-publish\]: Publishing goes through CI/)
+    assert.match(outcome.warnings.join('\n'), /observe \[team\.npm-publish\]: this call was allowed.*: Publishing goes through CI/)
   })
 
   it('keeps comments and other rules of an existing file', async () => {

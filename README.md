@@ -93,13 +93,13 @@ prints the composed profile; a loaded plugin shows the layer `# == dsh-guard` wi
 A separate profile keeps the app's own profile untouched. With the desktop app on Windows, use `& $dsh` from the quick start in place of `dsh`:
 
 ```sh
-dsh guardtest --from-default-profile headless --dump-config
+dsh --profile guardtest --from-default-profile headless --dump-config
 dsh plugin --profile guardtest add /path/to/dsh-guard-0.1.0
 dsh --profile guardtest --dump-config
 dsh --profile guardtest --patch /path/to/dsh-guard-0.1.0/examples/headless-account.yml "Call guard_list and quote its reply."
 ```
 
-The first command creates the profile `guardtest` from the shipped `headless` template and prints it; the second adds the plugin; the third shows the `dsh-guard` row. The fourth runs one task. The headless template turns off the DeepSeek account that the desktop app signs in to; `examples/headless-account.yml` turns it back on and selects the account's model. With an API key instead, set `DEEPSEEK_API_KEY` in the environment and leave out `--patch`. Without either, the task fails with `MISSING_CREDENTIAL` (for the provider `deepseek-official`) or `ACCOUNT_SIGN_IN_REQUIRED`. A headless session has no approval channel, so `ask` rules deny and `guard_apply` cannot write a rule there; create rules in the app or another interactive profile. To remove the test profile, delete the folder `guardtest` below `$DSH_HOME/profiles` (by default `~/.dsh/profiles`).
+(`dsh <name>` and `dsh --profile <name>` are the same; this document uses `--profile`.) The first command creates the profile `guardtest` from the shipped `headless` template and prints it; the second adds the plugin; the third shows the `dsh-guard` row. The fourth runs one task. The headless template turns off the DeepSeek account that the desktop app signs in to; `examples/headless-account.yml` turns it back on and selects the account's model. With an API key instead, set `DEEPSEEK_API_KEY` in the environment and leave out `--patch`. Without either, the task fails with `MISSING_CREDENTIAL` (for the provider `deepseek-official`) or `ACCOUNT_SIGN_IN_REQUIRED`. A headless session has no approval channel, so `ask` rules deny and `guard_apply` cannot write a rule there; create rules in the app or another interactive profile. To remove the test profile, delete the folder `guardtest` below `$DSH_HOME/profiles` (by default `~/.dsh/profiles`).
 
 ### Rule directory and decision log
 
@@ -264,7 +264,7 @@ The plugin adds a short section to the system prompt (`guidance/authoring.md`). 
 
 ### Observe mode
 
-A new rule is written in observe mode unless the request says `mode: enforce`: its action becomes `warn` and the drafted action is kept in `promote_to`. The rule then only adds a warning to matching calls, and each hit is logged. The approval prompt states the mode; to enforce at once, the user rejects the prompt and asks for `mode: enforce`.
+A new rule is written in observe mode unless the request says `mode: enforce`: its action becomes `warn` and the drafted action is kept in `promote_to`. The rule then only adds a notice to matching calls, and each hit is logged. The notice says that the call was allowed and what the rule would do once promoted: `dsh-guard observe [<id>]: this call was allowed; once enforced the rule would block it: <message>` (`ask for confirmation` or `redact the matching output` for the other actions). A plain `warn` rule, without `promote_to`, keeps the form `dsh-guard warning [<id>]: <message>`. The approval prompt states the mode; to enforce at once, the user rejects the prompt and asks for `mode: enforce`.
 
 `dsh-guard stats` lists the observe-mode rules with the number of calls they would have blocked (or asked on, or redacted) and their false-positive candidates, the calls that passed the rule with an override comment (only rules with `override: true` collect these). It suggests promotion when a rule has hits and no candidates, but never changes a rule. Promotion is a `modify` that sets `action` to the `promote_to` value, through `guard_apply` and its approval like any other change.
 
@@ -280,7 +280,7 @@ The rule loads after every layer, cannot be overridden or disabled, and has `ove
 
 ## Command line
 
-The command is not on `PATH` (see Install); run it as `node dist/cli.js <command>` from the package folder.
+The command is not on `PATH` (see Install); run it as `node dist/cli.js <command>` from the package folder. It needs Node.js 24.9 or later; on Windows the desktop app's node works (`ELECTRON_RUN_AS_NODE=1` with `DeepSeek Harness.exe`, see TESTING.md).
 
 ```sh
 dsh-guard test                 # run every rule's examples; exit 1 on a mismatch or a load error

@@ -71,8 +71,8 @@ describe('dsh headless: conversational rule authoring', { timeout: 300_000 }, ()
 
   it('warns on a matching call once the rule is written', () => {
     assert.equal(results().call_6.status, 'completed')
-    assert.match(seenByModel(7), /dsh-guard warning \[it\.observe\]: integration observe marker/)
-    assert.ok(!seenByModel(6).includes('dsh-guard warning [it.observe]'))
+    assert.match(seenByModel(7), /dsh-guard observe \[it\.observe\]: this call was allowed; once enforced the rule would block it: integration observe marker/)
+    assert.ok(!seenByModel(6).includes('dsh-guard observe [it.observe]'))
   })
 
   it('blocks generic tools from writing or deleting the rule files', () => {

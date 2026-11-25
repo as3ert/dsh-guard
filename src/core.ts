@@ -99,6 +99,16 @@ interface CacheEntry {
 }
 
 /** Rule cache, evaluation and logging for one host. */
+/**
+ * Notice text for a hit of a warn rule. An observe-mode rule (warn with promote_to) says that the call was allowed and what the rule would do once enforced; a plain warn keeps the rule message.
+ */
+function warningText(hit: { rule: { id: string, promote_to?: string }, message: string }): string {
+  const promote = hit.rule.promote_to
+  if (promote === undefined) return `dsh-guard warning [${hit.rule.id}]: ${hit.message}`
+  const verb = promote === 'block' ? 'block it' : promote === 'ask' ? 'ask for confirmation' : promote === 'redact' ? 'redact the matching output' : promote
+  return `dsh-guard observe [${hit.rule.id}]: this call was allowed; once enforced the rule would ${verb}: ${hit.message}`
+}
+
 export class GuardCore {
   readonly options: GuardOptions
   readonly log: DecisionLog
@@ -230,7 +240,7 @@ export class GuardCore {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'pre_tool', this.evalOptions())
     this.logHits(call, verdict, hit => hit.rule.action, callId)
-    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(hit => `dsh-guard warning [${hit.rule.id}]: ${hit.message}`)
+    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
     const failure = this.budgetDenial(verdict)
     if (failure !== undefined) return { kind: 'deny', reason: failure, warnings, verdict }
     if (verdict.action === 'block') return { kind: 'deny', reason: denialText(verdict.hits, 'block'), warnings, verdict }
@@ -263,7 +273,7 @@ export class GuardCore {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'post_tool', this.evalOptions())
     this.logHits(call, verdict, hit => hit.rule.action, callId)
-    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(hit => `dsh-guard warning [${hit.rule.id}]: ${hit.message}`)
+    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
     const redactHits = verdict.hits.filter(hit => hit.rule.action === 'redact')
     const failure = this.budgetDenial(verdict, false)
     if (failure !== undefined) return { kind: 'block', feedback: failure, redactHits, warnings, verdict }

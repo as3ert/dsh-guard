@@ -1,0 +1,15 @@
+rules:
+  - id: user.canary-delete
+    doc: Deleting the file canary.txt is blocked; reading it is fine.
+    tool: shell
+    match:
+      command: '\b(rm|del|unlink|Remove-Item)\b[^;&|]*\bcanary\.txt\b'
+    action: block
+    message: Deleting canary.txt is blocked by the tester rule.
+    examples:
+      block:
+        - rm canary.txt
+        - Remove-Item .\canary.txt
+      pass:
+        - cat canary.txt
+        - ls

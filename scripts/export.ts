@@ -45,12 +45,13 @@ const SKIP_DIRS = new Set(['.git', '.tools', 'node_modules', 'dist', 'coverage']
 const SKIP_FILE = /\.(log|jsonl|tgz|zip)$/i
 /**
  * YAML files allowed in the publishable tree: the synthetic fixture rules, the
- * integration rules, the dsh bundle layer and the example profile overlay;
+ * integration rules, the dsh bundle layer, the example profile overlay and the
+ * worked example rule shown in TESTING.md;
  * the last two hold no rules.
  */
 function yamlAllowed(path: string): boolean {
   return path.startsWith('test/fixtures/rules/') || path === 'test/fixtures/integration-rules.yaml' ||
-    path === 'cordis.patch.yml' || path === 'examples/headless-account.yml'
+    path === 'cordis.patch.yml' || path === 'examples/headless-account.yml' || path === 'examples/canary-rule.yaml'
 }
 
 interface Check {
