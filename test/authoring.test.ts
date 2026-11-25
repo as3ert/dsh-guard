@@ -3,8 +3,8 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { GuardAuthoring, approvalPrompt, promotionRequest } from '../src/authoring.ts'
-import type { ApprovalAnswer, DraftRequest } from '../src/authoring.ts'
+import { GuardAuthoring, approvalPrompt, promotionRequest, proposeText } from '../src/authoring.ts'
+import type { AskAnswer, DraftRequest } from '../src/authoring.ts'
 import { GuardCore } from '../src/core.ts'
 import { sessionHistory } from '../src/history.ts'
 import type { HistoricCall } from '../src/history.ts'
@@ -42,7 +42,7 @@ function setup(files: Record<string, string> = {}) {
 
 const call = (command: string, time: number, sessionId = 's1'): HistoricCall => ({ tool: 'bash', input: { command }, sessionId, callId: `c${time}`, time })
 const history = (calls: HistoricCall[]) => async (limit: number) => ({ calls: calls.slice(0, limit), sessions: 1 })
-const answer = (value: ApprovalAnswer, seen: string[] = []) => async (prompt: string) => {
+const answer = (value: AskAnswer, seen: string[] = []) => async (prompt: string) => {
   seen.push(prompt)
   return value
 }
@@ -331,5 +331,116 @@ describe('dsh-guard stats', () => {
     assert.match(out.stdout, /obs\.quiet .*\n\s+would have asked on 0 call\(s\)/)
     assert.match(out.stdout, /dsh-guard stats: 2 observe-mode rules/)
     assert.equal(readFileSync(join(root, 'user', 'rules.yaml'), 'utf8'), rule)
+  })
+})
+
+describe('dsh-guard lint', () => {
+  it('reports ambiguous string examples as errors and unbounded redact token prefixes as warnings', async () => {
+    const { spawnSync } = await import('node:child_process')
+    const root = tempDir()
+    const rules = [
+      'rules:',
+      '  - { id: env-search, tool: grep, match: { path: \'\\.env$\' }, action: block, examples: { block: [.env], pass: [{ tool: grep, input: { pattern: x, path: src } }] } }',
+      '  - { id: mask, when: post_tool, tool: any, match: { output: \'sk-[A-Za-z0-9]{16,}|\\bhf_[A-Za-z0-9]{20,}\' }, action: redact, examples: { block: [sk-0123456789abcdef0], pass: [ok] } }',
+      '',
+    ].join('\n')
+    writeTree(root, { 'user/rules.yaml': rules, 'project/.keep': '' })
+    const cli = join(import.meta.dirname, '..', 'src', 'cli.ts')
+    const out = spawnSync(process.execPath, [cli, 'lint', '--user-dir', join(root, 'user'), '--cwd', join(root, 'project')], { encoding: 'utf8' })
+    assert.equal(out.status, 1, out.stderr)
+    assert.match(out.stdout, /error .*\[env-search\]: block example "\.env": a plain-string example is ambiguous for tool grep/)
+    assert.match(out.stdout, /warning .*\[mask\]: redact alternative `sk-\[A-Za-z0-9\]\{16,\}` starts with the token prefix `sk-` without a left boundary/)
+    assert.doesNotMatch(out.stdout, /`hf_/)
+    assert.match(out.stdout, /dsh-guard lint: 3 rules from 1 files, 1 errors, 1 warnings/)
+  })
+})
+
+const REDACT_RULE = {
+  id: 'team.mask-key',
+  when: 'post_tool',
+  tool: 'any',
+  match: { output: '\\bsk-[A-Za-z0-9_-]{16,}' },
+  action: 'redact',
+  message: 'Key masked.',
+  examples: { block: ['key sk-0123456789abcdef0123'], pass: ['desk-lamp-controller-service started'] },
+}
+
+describe('redact rules', () => {
+  it('are always written enforced, even when observe mode is requested', async () => {
+    const { authoring, cwd } = setup()
+    const plain = await authoring.draft({ op: 'add', layer: 'user', rule: REDACT_RULE }, cwd)
+    assert.equal(plain.ok, true, plain.problems.join('; '))
+    assert.equal(plain.mode, 'enforce')
+    assert.equal(plain.entry?.action, 'redact')
+    assert.equal(plain.entry?.promote_to, undefined)
+    const asked = await authoring.draft({ op: 'add', layer: 'user', rule: REDACT_RULE, mode: 'observe' }, cwd)
+    assert.equal(asked.effective?.action, 'redact')
+    assert.match(asked.notes.join('\n'), /redact rules are always written enforced/)
+    const observeShape = await authoring.draft({ op: 'add', layer: 'user', rule: { ...REDACT_RULE, action: 'warn', promote_to: 'redact' } }, cwd)
+    assert.equal(observeShape.entry?.action, 'redact')
+    assert.equal(observeShape.entry?.promote_to, undefined)
+    const seen: string[] = []
+    const applied = await authoring.apply({ op: 'add', layer: 'user', rule: REDACT_RULE }, cwd, history([]), answer('allowed-once', seen))
+    assert.equal(applied.applied, true, applied.message)
+    assert.match(seen[0], /Mode: ENFORCE/)
+  })
+
+  it('note a token prefix without a left boundary', async () => {
+    const { authoring, cwd } = setup()
+    const draft = await authoring.draft({ op: 'add', layer: 'user', rule: { ...REDACT_RULE, match: { output: 'sk-[A-Za-z0-9_-]{16,}' }, examples: { block: ['sk-0123456789abcdef0123'], pass: ['ok'] } } }, cwd)
+    assert.equal(draft.ok, true)
+    assert.match(draft.notes.join('\n'), /token prefix `sk-` without a left boundary/)
+    const bounded = await authoring.draft({ op: 'add', layer: 'user', rule: REDACT_RULE }, cwd)
+    assert.doesNotMatch(bounded.notes.join('\n'), /left boundary/)
+  })
+})
+
+describe('guard_propose', () => {
+  it('drafts, tests and replays in one call and writes nothing', async () => {
+    const { authoring, cwd } = setup()
+    const result = await authoring.propose({ op: 'add', layer: 'project', rule: NEW_RULE }, cwd, history([call('npm publish', 5), call('npm pack', 4)]))
+    const text = proposeText(result)
+    assert.match(text, /^Proposal READY: draft OK, 4 example\(s\) pass, replay fires on 1 of 2 past call\(s\), 1 new/)
+    assert.match(text, /Draft add team\.npm-publish in the project layer .*: OK/)
+    assert.match(text, /Examples: 4 passed, 0 failed/)
+    assert.match(text, /\[new\] .* bash: npm publish/)
+    assert.equal(existsSync(join(cwd, '.dsh-guard')), false)
+  })
+
+  it('says NOT READY for failing examples, a bad draft and reports a missing history', async () => {
+    const { authoring, cwd } = setup()
+    const failing = proposeText(await authoring.propose({ op: 'add', layer: 'user', rule: { ...NEW_RULE, examples: { block: ['npm pack'], pass: ['ls'] } } }, cwd, history([])))
+    assert.match(failing, /^Proposal NOT READY: the examples fail \(1 failed\)/)
+    assert.match(failing, /FAIL block "npm pack"/)
+    const bad = proposeText(await authoring.propose({ op: 'add', layer: 'user', rule: { id: 'x', bogus: 1 } }, cwd, history([])))
+    assert.match(bad, /^Proposal NOT READY: the draft has problems/)
+    assert.match(bad, /unknown field `bogus`/)
+    const noHistory = proposeText(await authoring.propose({ op: 'add', layer: 'user', rule: NEW_RULE }, cwd, undefined))
+    assert.match(noHistory, /replay unavailable/)
+    assert.match(noHistory, /Replay unavailable: this composition has no session query service/)
+  })
+})
+
+describe('approval texts', () => {
+  it('gives the desktop card one compact paragraph with headline, rule, examples and replay hits', async () => {
+    const { authoring, cwd } = setup()
+    const displays: string[] = []
+    await authoring.apply({ op: 'add', layer: 'project', rule: NEW_RULE, mode: 'enforce' }, cwd, history([call('npm publish', 5)]), async (_prompt, display) => {
+      displays.push(display)
+      return 'rejected'
+    })
+    const display = displays[0]
+    assert.doesNotMatch(display, /\n/)
+    assert.match(display, /^dsh-guard: Add rule team\.npm-publish · project layer · ENFORCE block \| Rule: shell; command \\bnpm\\s\+publish\\b; message "Publishing goes through CI\." \| Examples: 4 passed, 0 failed \| Replay of 1 past calls: fires on 1 as block, newly 1, no longer 0; \[new\] bash: npm publish \| File: /)
+  })
+
+  it('tells a rejection apart from a policy that never asks', async () => {
+    const { authoring, cwd } = setup()
+    const run = async (value: AskAnswer) => (await authoring.apply({ op: 'add', layer: 'user', rule: NEW_RULE }, cwd, history([]), answer(value))).message
+    assert.match(await run('rejected'), /^Not applied: the user rejected the approval prompt/)
+    assert.match(await run('policy-never'), /approval policy of this session is set to never ask.*switch the approval policy to ask/)
+    assert.match(await run('rejected-or-never'), /^Not applied: the approval was rejected or not shown\. If no prompt was shown, the approval policy is set to never ask: switch it to ask for this change, since guard rules can only be changed with the user's approval\./)
+    assert.match(await run('unavailable'), /approval was unavailable/)
+    assert.equal(existsSync(join(cwd, '..', 'user', 'rules.yaml')), false)
   })
 })

@@ -43,7 +43,7 @@ const ASK_RULE = {
 const AUTHORING_SCRIPT = [
   { name: SHELL, args: { description: 'Observe marker before the rule', command: 'echo dsh-guard-it-observe-marker first' } },
   { name: 'guard_list', args: {} },
-  { name: 'guard_draft', args: CHANGE },
+  { name: 'guard_propose', args: CHANGE },
   { name: 'guard_test', args: CHANGE },
   { name: 'guard_replay', args: CHANGE },
   { name: 'guard_apply', args: CHANGE },

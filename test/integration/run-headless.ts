@@ -33,7 +33,7 @@ export interface HeadlessRun {
   /** dsh-guard decision log records. */
   readonly log: Record<string, unknown>[]
   /** Approval requests the scripted answerer saw (only with `approver`). */
-  readonly approvals: { toolName: string, callId: string | null, reason: string | null }[]
+  readonly approvals: { toolName: string, callId: string | null, reason: string | null, display: string | null }[]
   /** Workspace directory the session ran in. */
   readonly workspace: string
 }

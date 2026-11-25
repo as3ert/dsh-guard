@@ -8,32 +8,59 @@ const DEFAULT_TOOL: Readonly<Record<string, string>> = {
 }
 
 /** Raw tool name used for an example of this rule. */
-function exampleTool(rule: Rule): string {
+function exampleTool(rule: Pick<Rule, 'tool'>): string {
   const named = rule.tool.find(name => name !== 'any') ?? 'any'
   return DEFAULT_TOOL[named] ?? named
 }
 
+/** Object form shown when a plain-string example is ambiguous for a tool. */
+const OBJECT_FORM: Readonly<Record<string, string>> = {
+  grep: '{"tool": "grep", "input": {"pattern": "<regex searched for>", "path": "<file or directory>"}}',
+  glob: '{"tool": "glob", "input": {"pattern": "<glob>", "path": "<directory>"}}',
+  web_search: '{"tool": "web_search", "input": {"queries": ["<query>"]}}',
+  search: '{"tool": "grep", "input": {"pattern": "...", "path": "..."}} or {"tool": "web_search", "input": {"queries": ["..."]}}',
+  write: '{"tool": "write", "input": {"file_path": "<path>", "content": "<text>"}}',
+  edit: '{"tool": "edit", "input": {"file_path": "<path>", "old_string": "<old>", "new_string": "<new>"}}',
+  apply_patch: '{"tool": "apply_patch", "input": {"input": "*** Begin Patch\\n*** Update File: <path>\\n..."}}',
+  str_replace_editor: '{"tool": "str_replace_editor", "input": {"command": "create", "path": "<path>", "file_text": "<text>"}}',
+}
+
+/**
+ * Error for a plain-string example of a tool with several matchable fields.
+ * @param named - tool the rule names (canonical or raw).
+ * @param canonical - canonical name of the example call.
+ */
+function ambiguousString(named: string, canonical: string): string {
+  const fields = canonical === 'search' ? 'the search pattern, the query or the path' : canonical === 'edit' ? 'the path, the old or the new text' : 'the path or the content'
+  const form = OBJECT_FORM[named] ?? OBJECT_FORM[canonical] ?? `{"tool": "${named}", "input": {...}}`
+  return `a plain-string example is ambiguous for tool ${named} (it could be ${fields}); write it as an object, for example ${form}`
+}
+
 /**
  * Build the call an example stands for.
- * A string is the primary field (command, path, url, query, or the output
- * of a post_tool rule); a mapping with `tool`/`input`/`output`/`cwd` is a
- * full call; any other mapping is the input of the rule's tool.
+ * A string is shorthand only where one field is meant: the command of a
+ * shell (or `any`) rule, the path of a read rule, the url of a fetch rule,
+ * and the output of a post_tool rule. For write, edit and search tools
+ * (grep, glob, web_search) a string is ambiguous and reported as an error.
+ * A mapping with `tool`/`input`/`output`/`cwd` is a full call; any other
+ * mapping is the input of the rule's tool.
  * @param rule - the rule the example belongs to.
  * @param example - YAML value.
  * @returns the call, or an error.
  */
-export function exampleCall(rule: Rule, example: unknown): { call?: ToolCall, error?: string } {
+export function exampleCall(rule: Pick<Rule, 'tool' | 'when'>, example: unknown): { call?: ToolCall, error?: string } {
   const tool = exampleTool(rule)
   if (typeof example === 'string') {
     if (rule.when === 'post_tool') return { call: { tool, input: {}, output: example } }
-    switch (canonicalName(tool, {})) {
+    const canonical = canonicalName(tool, {})
+    switch (canonical) {
       case 'shell': return { call: { tool, input: { command: example } } }
-      case 'edit':
-      case 'write':
       case 'read': return { call: { tool, input: { file_path: example } } }
       case 'fetch': return { call: { tool, input: { url: example } } }
-      case 'search': return { call: { tool, input: { queries: [example] } } }
-      default: return { error: `a string example needs a known tool; write {tool, input} for ${tool}` }
+      case 'edit':
+      case 'write':
+      case 'search': return { error: ambiguousString(rule.tool.find(name => name !== 'any') ?? tool, canonical) }
+      default: return { error: `a string example needs a known tool; write {"tool": "${tool}", "input": {...}} for ${tool}` }
     }
   }
   if (typeof example !== 'object' || example === null || Array.isArray(example)) {

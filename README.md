@@ -165,7 +165,7 @@ rules:
     when: post_tool
     tool: any
     match:
-      output: 'itk_[A-Za-z0-9]{32}'
+      output: '\bitk_[A-Za-z0-9]{32}'
     action: redact
     message: Internal token masked.
     examples:
@@ -201,13 +201,15 @@ dsh tool names differ by platform and composition, so rules usually name a canon
 | `write` | `write`, `str_replace_editor` (`create`) | `path`, `content` |
 | `read` | `read`, `read_image`, `str_replace_editor` (`view`) | `path` |
 | `fetch` | `web_fetch` | `url` |
-| `search` | `web_search`, `grep`, `glob` | `query` |
+| `search` | `web_search`, `grep`, `glob` | `query` (the `queries` of web_search, the `pattern` of grep and glob); grep and glob also `path` |
 
 Every call also has `cwd`, the session's working directory, and post_tool rules see `output`, the text of the tool result. Any other tool, for example an MCP tool, is matched by its raw name and raw argument names.
 
 ### Examples
 
-A string example stands for the primary field of the rule's first tool: the command of a shell rule, the path of a read, write or edit rule, the URL of a fetch rule, or the output of a post_tool rule. A mapping is either the input of that tool (`{ file_path: a.ts, content: ... }`) or a full call (`{ tool: pwsh, input: { command: ... }, output: ..., cwd: ... }`). Examples run with override comments honoured, so an overridden command belongs under `pass`.
+A plain-string example is shorthand only where the rule's first tool has one field that is meant: the command of a `shell` (or `any`) rule, the path of a `read` rule, the URL of a `fetch` rule, or the output of a post_tool rule. For `write`, `edit` and search tools (`search`, `grep`, `glob`, `web_search`) a string is ambiguous (path or content; path, old or new text; pattern, query or path), so `dsh-guard test`, `dsh-guard lint` and the authoring tools report it as an error that shows the object form instead of guessing a field. A mapping is either the input of that tool (`{ file_path: a.ts, content: ... }`) or a full call (`{ tool: grep, input: { pattern: token, path: .env } }`, `{ tool: pwsh, input: { command: ... }, output: ..., cwd: ... }`). Examples run with override comments honoured, so an overridden command belongs under `pass`.
+
+In `redact` patterns, a token prefix needs a left boundary: `sk-[A-Za-z0-9_-]{16,}` alone also masks part of `desk-lamp-controller-service`, while `\bsk-...` or `(?<![A-Za-z0-9_-])sk-...` does not. `dsh-guard lint` warns about a redact alternative that starts with two to four letters and `-` or `_` without such a boundary.
 
 ## Layers
 
@@ -248,23 +250,28 @@ Each decision appends one JSON line to the log: `time`, `rule`, `verdict` (`bloc
 
 ## Authoring rules in conversation
 
-The plugin registers five tools, so a dsh user can create, change and remove rules by talking to the agent. Each tool takes the same change request (`op`: `add`, `modify` or `remove`; `layer`: `user`, `project` or `local`; `rule`, `id`, `reason`, `mode`) and checks it again from scratch, so no draft state is kept between calls.
+The plugin registers six tools, so a dsh user can create, change and remove rules by talking to the agent. Each tool takes the same change request (`op`: `add`, `modify` or `remove`; `layer`: `user`, `project` or `local`; `rule`, `id`, `reason`, `mode`) and checks it again from scratch, so no draft state is kept between calls.
 
 | tool | writes | does |
 |---|---|---|
 | `guard_list` | no | Rules in force for the session: id, defining and overriding layers, phase and tools, action (with `promote_to` for observe-mode rules), hit and override counts from the decision log, file. With no rules yet, it says so and points the user to describing what to guard. |
+| `guard_propose` | no | Drafts, runs the examples and replays in one call, and returns a READY or NOT READY line with the problems, the example results and the replay hits. This is the tool the guidance uses; the three below run the same checks separately. |
 | `guard_draft` | no | Validates the schema and regexes, then loads all layers with the change simulated in memory, so layering and the tighten-only rule apply exactly as they will on disk. Returns the problems, or the entry that would be written and the rule in force afterwards. |
 | `guard_test` | no | Runs the drafted rule's examples: each `block` example must fire, each `pass` example must not. A new rule needs at least one of each. |
 | `guard_replay` | no | Runs the draft against the newest 500 tool calls of the session history and lists the calls it would fire on (`new`), still fires on (`kept`) or no longer fires on (`gone`). |
 | `guard_apply` | yes | Drafts, tests and replays the change again, then asks the user through `ctx.approval`; the prompt shows the entry, the example results and the replay hits. Only `allowed-once` writes the file. If the file changed while the prompt was open, nothing is written; if the written file does not load as drafted, the previous content is restored. |
 
+The approval request carries two texts. `reason`, which dsh stores in the session's audit events, is the full multi-line prompt. `displayReason`, which the desktop app shows, is one paragraph, because the app renders it as the card's headline and collapses line breaks: a headline with operation, rule id, layer and mode, then `Rule: ...`, `Examples: ...`, `Replay of N past calls: ...` (with up to three hits) and `File: ...`, separated by ` | `. The full detail is also in the `guard_propose` result the agent shows beforehand.
+
+When `guard_apply` is not approved, its result says why, as far as dsh tells: the user rejected the prompt (approval policy ask); the session's approval policy is set to never ask, so dsh rejected without showing anything, and the policy must be switched to ask for the change; no approval channel exists (`unavailable`, for example headless); or the prompt was cancelled. If the policy cannot be read, the result names both possibilities.
+
 `add` writes a new rule. `modify` changes the given fields, in the rule's own file or as an override entry in a higher layer, where the tighten-only rule applies. `remove` deletes the rule's entry from the layer that defines it or, for a rule defined in a lower layer, writes `disabled: true` with the `reason` (user and local layers only). The tools never write `check` hooks, and built-in rules cannot be changed. Rules are written to `rules.yaml` in the layer's directory, or to the file that already holds the rule; comments and other entries of an existing file are kept. Each applied change is logged with the verdict `authoring-add`, `authoring-modify` or `authoring-remove`.
 
-The plugin adds a short section to the system prompt (`guidance/authoring.md`). It tells the agent to ask about the boundary first (what must be stopped, which similar calls must keep working, which layer), to go through draft, test and replay before apply, and never to write rule files any other way.
+The plugin adds a short section to the system prompt (`guidance/authoring.md`). It tells the agent to list the rules, ask about the boundary (what must be stopped, which similar calls must keep working, which layer, which mode), call `guard_propose` until it is READY, show the result, and call `guard_apply` only after the user agreed; and never to write rule files any other way.
 
 ### Observe mode
 
-A new rule is written in observe mode unless the request says `mode: enforce`: its action becomes `warn` and the drafted action is kept in `promote_to`. The rule then only adds a notice to matching calls, and each hit is logged. The notice says that the call was allowed and what the rule would do once promoted: `dsh-guard observe [<id>]: this call was allowed; once enforced the rule would block it: <message>` (`ask for confirmation` or `redact the matching output` for the other actions). A plain `warn` rule, without `promote_to`, keeps the form `dsh-guard warning [<id>]: <message>`. The approval prompt states the mode; to enforce at once, the user rejects the prompt and asks for `mode: enforce`.
+A new rule is written in observe mode unless the request says `mode: enforce`: its action becomes `warn` and the drafted action is kept in `promote_to`. The guidance recommends observe mode for new rules, with one exception: a rule whose purpose is to prevent a leak or an irreversible loss on the first hit, such as reading credential or secret files, is recommended as `mode: enforce`, since observing it would let the first hit through. `redact` rules are always written enforced, whatever `mode` says, because an observe-mode redact rule only warns and masks nothing (the draft says so in a note). The rule then only adds a notice to matching calls, and each hit is logged. The notice says that the call was allowed and what the rule would do once promoted: `dsh-guard observe [<id>]: this call was allowed; once enforced the rule would block it: <message>` (`ask for confirmation` or `redact the matching output` for the other actions). A plain `warn` rule, without `promote_to`, keeps the form `dsh-guard warning [<id>]: <message>`. The approval prompt states the mode; to enforce at once, the user rejects the prompt and asks for `mode: enforce`.
 
 `dsh-guard stats` lists the observe-mode rules with the number of calls they would have blocked (or asked on, or redacted) and their false-positive candidates, the calls that passed the rule with an override comment (only rules with `override: true` collect these). It suggests promotion when a rule has hits and no candidates, but never changes a rule. Promotion is a `modify` that sets `action` to the `promote_to` value, through `guard_apply` and its approval like any other change.
 

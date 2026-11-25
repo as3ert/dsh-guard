@@ -1,6 +1,6 @@
 /**
- * Model-facing authoring tools: guard_list, guard_draft, guard_test,
- * guard_replay and guard_apply. Each tool takes the same change request and
+ * Model-facing authoring tools: guard_list, guard_propose (draft, test and
+ * replay in one call), guard_draft, guard_test, guard_replay and guard_apply. Each tool takes the same change request and
  * re-checks it from scratch, so no draft state lives between calls.
  * @module
  */
@@ -10,8 +10,8 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { GuardAuthoring, REPLAY_LIMIT, draftText, isObserve, onlyBuiltin, replayText, testText } from './authoring.ts'
-import type { ApprovalAnswer, AuthoringLayer, DraftRequest, Mode, Operation } from './authoring.ts'
+import { GuardAuthoring, REPLAY_LIMIT, draftText, isObserve, onlyBuiltin, proposeText, replayText, testText } from './authoring.ts'
+import type { ApprovalAnswer, AskAnswer, AuthoringLayer, DraftRequest, Mode, Operation } from './authoring.ts'
 import type { GuardCore } from './core.ts'
 import { sessionHistory } from './history.ts'
 import type { HistorySource, SessionQueryLike } from './history.ts'
@@ -26,12 +26,33 @@ export function guidanceText(): string {
   try {
     return readFileSync(GUIDANCE_FILE, 'utf8').trim()
   } catch {
-    return 'Guard rules are changed only through guard_draft, guard_test, guard_replay and guard_apply; ask the user about the boundary first and never apply without the approval prompt.'
+    return 'Guard rules are changed only through guard_propose and guard_apply; ask the user about the boundary first and never apply without the approval prompt.'
   }
 }
 
 interface ApprovalLike {
   request(req: { agent: unknown, toolName: string, callId?: unknown, reason?: string, displayReason?: { en: string }, signal?: AbortSignal }): Promise<ApprovalAnswer>
+  /** dsh-user-approval: the session's logged policy override, if any. */
+  overrideOf?(session: unknown): 'ask' | 'never' | undefined
+  /** dsh-user-approval: the configured default policy. */
+  config?: { policy?: 'ask' | 'never' }
+}
+
+/** The session's approval policy, when the approval service exposes it. */
+export function approvalPolicy(approval: ApprovalLike, session: unknown): 'ask' | 'never' | undefined {
+  try {
+    const override = typeof approval.overrideOf === 'function' && session !== undefined ? approval.overrideOf(session) : undefined
+    const policy = override ?? (typeof approval.overrideOf === 'function' ? approval.config?.policy ?? 'ask' : approval.config?.policy)
+    return policy === 'ask' || policy === 'never' ? policy : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Split dsh's `rejected` by the policy it was decided under. */
+export function askAnswer(outcome: ApprovalAnswer, policy: 'ask' | 'never' | undefined): AskAnswer {
+  if (outcome !== 'rejected') return outcome
+  return policy === 'never' ? 'policy-never' : policy === 'ask' ? 'rejected' : 'rejected-or-never'
 }
 
 const CHANGE_PARAMETERS = {
@@ -40,7 +61,7 @@ const CHANGE_PARAMETERS = {
   rule: { type: 'json', description: 'add: the complete rule object (id, tool, match, action, message, examples.block, examples.pass, optional doc, when, override). modify: id plus the fields to change. Same fields as the YAML rule files.' },
   id: { type: 'string', description: 'Rule id for remove.' },
   reason: { type: 'string', description: 'remove of a rule defined in a lower layer: why it is switched off (written as disabled: true).' },
-  mode: { type: 'string', enum: ['observe', 'enforce'], description: 'add only. observe (default): the rule is written as action warn with promote_to set to the drafted action. enforce: only when the user explicitly asked for immediate enforcement ("enforce", "immediately"); a plain "do not let you X" is not that. Recommend observe to the user for a new rule: a fresh regex can be too wide or too narrow.' },
+  mode: { type: 'string', enum: ['observe', 'enforce'], description: 'add only. observe (default): the rule is written as action warn with promote_to set to the drafted action. enforce: the rule takes effect at once. Recommend observe for a new rule (a fresh regex can be too wide or too narrow), except for rules that prevent a leak or an irreversible loss on the first hit, such as reading credential or secret files: recommend enforce for those, since observe would let the first hit through. Use enforce when the user agreed to it or asked for it. Redact rules are always written enforced (observe would mask nothing), whatever this field says.' },
 } as const
 
 /** Turn validated tool arguments into a draft request. */
@@ -67,7 +88,7 @@ function requestOf(args: { op: string, layer: string, rule?: unknown, id?: strin
 /** Shown by guard_list while no rule file defines any rule. */
 export const NO_RULES_TEXT = 'No guard rules exist yet: dsh-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. '
   + 'The user can describe in this conversation what should be guarded (which calls to block, ask about or warn on, and which similar calls must keep working); '
-  + 'turn that into a first rule with guard_draft, guard_test, guard_replay and guard_apply. The rule object format and a complete example are in the dsh-guard section of the system prompt; do not search the filesystem for a schema.'
+  + 'turn that into a first rule with guard_propose and guard_apply. The rule object format and a complete example are in the dsh-guard section of the system prompt; do not search the filesystem for a schema.'
 
 /** One line per rule for guard_list. */
 export function listText(rules: readonly Rule[], logPath: string, filter: { layer?: string, observeOnly?: boolean } = {}): string {
@@ -128,6 +149,16 @@ export function registerAuthoringTools(ctx: Context, core: GuardCore, cwdOf: (ex
   }))
 
   ctx.tools.register(defineTool({
+    name: 'guard_propose',
+    description: `Check a dsh-guard rule change in one call, writing nothing: draft (schema, regexes, layering, tighten-only rule), run its examples (every examples.block call must fire, every examples.pass call must not) and replay it against the newest ${REPLAY_LIMIT} past tool calls. Returns a READY or NOT READY line, the problems, the example results and the replay hits. Use this instead of guard_draft, guard_test and guard_replay; repeat until READY, then show the user the rule and the hits.`,
+    parameters: CHANGE_PARAMETERS,
+    output: text,
+    async execute(args, exec) {
+      return proposeText(await authoring.propose(requestOf(args), cwdOf(exec), history()))
+    },
+  }))
+
+  ctx.tools.register(defineTool({
     name: 'guard_draft',
     description: 'Check a dsh-guard rule change without writing anything: schema, regexes, layering and the tighten-only rule for overrides (an override may not change when, tool, match or check, nor loosen action or override; the project layer cannot disable rules). Returns problems, or the entry that would be written and the rule in force afterwards. Ask the user about the boundary before drafting.',
     parameters: CHANGE_PARAMETERS,
@@ -165,15 +196,17 @@ export function registerAuthoringTools(ctx: Context, core: GuardCore, cwdOf: (ex
 
   ctx.tools.register(defineTool({
     name: 'guard_apply',
-    description: 'Write a dsh-guard rule change (add, modify or remove) to the chosen layer file. It drafts, tests and replays the change again, then asks the user through an approval prompt that shows the rule, the example results and the replay hits; nothing is written without that approval. New rules are written in observe mode (warn) unless mode is enforce. Use only after guard_draft, guard_test and guard_replay and after the user agreed.',
+    description: 'Write a dsh-guard rule change (add, modify or remove) to the chosen layer file. It drafts, tests and replays the change again, then asks the user through an approval prompt that shows the rule, the example results and the replay hits; nothing is written without that approval. New rules are written in observe mode (warn) unless mode is enforce; redact rules always enforced. Use only after guard_propose returned READY and the user agreed. If it reports that the approval was rejected or not shown, tell the user the reason it gives.',
     parameters: CHANGE_PARAMETERS,
     output: text,
     async execute(args, exec) {
       const request = requestOf(args)
-      const result = await authoring.apply(request, cwdOf(exec), history(), async prompt => {
+      const result = await authoring.apply(request, cwdOf(exec), history(), async (prompt, display) => {
         const approval = service<ApprovalLike>('approval')
         if (approval === undefined || exec.agent === undefined) return 'unavailable'
-        return approval.request({ agent: exec.agent, toolName: 'guard_apply', callId: exec.callId, reason: prompt, displayReason: { en: prompt }, signal: exec.signal })
+        // reason (multi-line) goes to the audit log; displayReason is what the desktop card shows as one headline.
+        const outcome = await approval.request({ agent: exec.agent, toolName: 'guard_apply', callId: exec.callId, reason: prompt, displayReason: { en: display }, signal: exec.signal })
+        return askAnswer(outcome, approvalPolicy(approval, (exec.agent as { session?: unknown }).session))
       })
       const parts = [result.message]
       if (!result.applied && result.outcome === 'refused') parts.push(draftText(result.draft))

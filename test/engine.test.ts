@@ -209,3 +209,39 @@ describe('GuardCore actions', () => {
     assert.equal((await guard.pre({ tool: 'bash', input: { command: 'foo' }, cwd: join(root, 'project') })).kind, 'deny')
   })
 })
+
+describe('example forms', () => {
+  it('treats a string as the command, read path or url, and rejects it for write, edit and search tools', async () => {
+    const set = await rulesFrom(`
+- { id: sh, tool: shell, match: { command: deploy }, action: block, examples: { block: [deploy], pass: [build] } }
+- { id: rd, tool: read, match: { path: secret }, action: block, examples: { block: [a/secret], pass: [a/public] } }
+- { id: gr, tool: grep, match: { path: secret }, action: block, examples: { block: [a/secret], pass: [{ tool: grep, input: { pattern: x, path: a/public } }] } }
+- { id: wr, tool: write, match: { path: secret }, action: block, examples: { block: [a/secret] } }
+- { id: ed, tool: edit, match: { new: secret }, action: block, examples: { block: [secret] } }
+- { id: ws, tool: search, match: { query: secret }, action: block, examples: { block: [secret] } }
+`)
+    const byId = Object.fromEntries(set.rules.map(rule => [rule.id, runExamples(rule)]))
+    assert.equal(byId.sh.failures.length, 0)
+    assert.equal(byId.rd.failures.length, 0)
+    assert.equal(byId.gr.passed, 1)
+    assert.match(byId.gr.failures[0].problem, /ambiguous for tool grep .*\{"tool": "grep", "input": \{"pattern": .*"path": /)
+    assert.match(byId.wr.failures[0].problem, /ambiguous for tool write .*"file_path"/)
+    assert.match(byId.ed.failures[0].problem, /ambiguous for tool edit .*"old_string"/)
+    assert.match(byId.ws.failures[0].problem, /ambiguous for tool search .*grep.*web_search/)
+  })
+
+  it('runs the object form of a grep example against the raw path argument', async () => {
+    const set = await rulesFrom(`
+- id: gr
+  tool: grep
+  match: { path: '(?:^|/)\\.env$' }
+  action: block
+  examples:
+    block: [{ tool: grep, input: { pattern: token, path: .env } }]
+    pass: [{ tool: grep, input: { pattern: token, path: src } }]
+`)
+    const result = runExamples(set.rules[0])
+    assert.deepEqual(result.failures, [])
+    assert.equal(result.passed, 2)
+  })
+})

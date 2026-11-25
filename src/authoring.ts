@@ -16,7 +16,7 @@ import { runExamples } from './examples.ts'
 import type { ExampleFailure } from './examples.ts'
 import type { History, HistoricCall, HistorySource } from './history.ts'
 import { loadRules } from './loader.ts'
-import { looksCatastrophic } from './regex.ts'
+import { looksCatastrophic, tokenPrefixRemark, unboundedTokenPrefixes } from './regex.ts'
 import { checkEntry } from './schema.ts'
 import { CANONICAL_TOOLS, summarize, viewOf } from './tools.ts'
 import type { Action, Issue, Rule, RuleSet } from './types.ts'
@@ -42,7 +42,7 @@ export interface DraftRequest {
   readonly id?: string
   /** remove of a rule defined in a lower layer: why it is switched off. */
   readonly reason?: string
-  /** add only; default `observe`. */
+  /** add only; default `observe`. Redact rules are always written enforced. */
   readonly mode?: Mode
 }
 
@@ -106,18 +106,45 @@ export interface ReplayResult {
   readonly note?: string
 }
 
-/** Answer of the approval prompt. */
+/** Answer of the approval prompt, as dsh reports it. */
 export type ApprovalAnswer = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable'
+
+/**
+ * Answer of the approval step as far as the plugin can tell it apart: dsh's
+ * outcome, with `rejected` split by the session's approval policy.
+ * `rejected`: the policy is ask, so the user (or an approval answerer)
+ * rejected; `policy-never`: the policy is never ask, so dsh rejected without
+ * showing anything; `rejected-or-never`: rejected, the policy is unknown.
+ */
+export type AskAnswer = ApprovalAnswer | 'policy-never' | 'rejected-or-never'
+
+/** Tool-result text for each failed approval answer. */
+export const APPROVAL_FAILURE: Readonly<Record<Exclude<AskAnswer, 'allowed-once'>, string>> = {
+  'rejected': 'Not applied: the user rejected the approval prompt. Ask the user what to change; do not call guard_apply again unchanged.',
+  'policy-never': 'Not applied: the approval policy of this session is set to never ask, so dsh rejected the approval without showing it. Guard rules can only be changed with the user\'s approval: ask the user to switch the approval policy to ask for this change, then call guard_apply again.',
+  'rejected-or-never': 'Not applied: the approval was rejected or not shown. If no prompt was shown, the approval policy is set to never ask: switch it to ask for this change, since guard rules can only be changed with the user\'s approval.',
+  'cancelled': 'Not applied: the approval prompt was cancelled (the turn was interrupted).',
+  'unavailable': 'Not applied: the approval was unavailable; no approval prompt can be shown in this composition (for example dsh headless without an answerer). Guard rules can only be changed with the user\'s approval.',
+}
+
+/** Draft, example run and replay of one proposed change. */
+export interface ProposeResult {
+  readonly draft: DraftResult
+  readonly test?: TestResult
+  readonly replay?: ReplayResult
+  /** Why the replay did not run. */
+  readonly replayNote?: string
+}
 
 /** Outcome of an apply attempt. */
 export interface ApplyResult {
   readonly applied: boolean
-  readonly outcome: 'written' | 'refused' | ApprovalAnswer | 'failed'
+  readonly outcome: 'written' | 'refused' | AskAnswer | 'failed'
   readonly message: string
   readonly draft: DraftResult
   readonly test?: TestResult
   readonly replay?: ReplayResult
-  /** The prompt shown to the user. */
+  /** The full approval prompt. */
   readonly prompt?: string
 }
 
@@ -218,8 +245,10 @@ export class GuardAuthoring {
     const notes: string[] = []
     const op = request.op
     const layer = request.layer
-    const mode: Mode = op === 'add' ? request.mode ?? 'observe' : 'enforce'
     const rawRule = request.rule
+    // A redact rule in observe mode would only warn and mask nothing, so it is always written enforced.
+    const redactRule = op === 'add' && (rawRule?.action === 'redact' || (rawRule?.action === 'warn' && rawRule.promote_to === 'redact'))
+    const mode: Mode = op === 'add' && !redactRule ? request.mode ?? 'observe' : 'enforce'
     const id = typeof rawRule?.id === 'string' ? rawRule.id : request.id ?? ''
     const base = { op, layer, id, mode, notes, problems }
     const fail = (message: string, file = ''): DraftResult => ({ ...base, ok: false, file, problems: [...problems, message] })
@@ -257,6 +286,12 @@ export class GuardAuthoring {
 
     if (op === 'add') {
       entry = { ...rawRule, id }
+      if (redactRule) {
+        if (entry.action === 'warn') {
+          entry = Object.fromEntries(Object.entries(entry).flatMap(([key, value]) => (key === 'promote_to' ? [] : key === 'action' ? [['action', 'redact']] : [[key, value]])))
+        }
+        if (request.mode === 'observe' || rawRule?.action === 'warn') notes.push('redact rules are always written enforced: in observe mode a redact rule only warns and masks nothing')
+      }
       const action = entry.action
       if (mode === 'observe' && action !== undefined && action !== 'warn') {
         entry = Object.fromEntries(Object.entries(entry).flatMap(([key, value]) => (key === 'action' ? [['action', 'warn'], ['promote_to', value]] : [[key, value]])))
@@ -327,6 +362,11 @@ export class GuardAuthoring {
     if (effective !== undefined) {
       for (const [key, patterns] of Object.entries(effective.match)) {
         for (const pattern of patterns) if (looksCatastrophic(pattern)) notes.push(`match.${key}: pattern may backtrack catastrophically: ${pattern}`)
+      }
+      if (effective.action === 'redact' || effective.promote_to === 'redact') {
+        for (const pattern of effective.match.output ?? []) {
+          for (const alternative of unboundedTokenPrefixes(pattern)) notes.push(`match.output: ${tokenPrefixRemark(alternative)}`)
+        }
       }
       for (const name of effective.tool) {
         if (name !== 'any' && !(CANONICAL_TOOLS as readonly string[]).includes(name)) notes.push(`tool \`${name}\` is not a canonical tool; it matches only the raw dsh tool of that name`)
@@ -408,13 +448,31 @@ export class GuardAuthoring {
   }
 
   /**
+   * Draft, test and replay a change in one step; writes nothing.
+   * @param request - the change.
+   * @param cwd - project directory of the session.
+   * @param history - source of past calls, or undefined when replay is unavailable.
+   */
+  async propose(request: DraftRequest, cwd: string, history: HistorySource | undefined): Promise<ProposeResult> {
+    const draft = await this.draft(request, cwd)
+    if (!draft.ok) return { draft }
+    const test = this.test(draft)
+    if (history === undefined) return { draft, test, replayNote: 'Replay unavailable: this composition has no session query service.' }
+    try {
+      return { draft, test, replay: this.replay(draft, await history(REPLAY_LIMIT)) }
+    } catch (error) {
+      return { draft, test, replayNote: `Replay unavailable: session history could not be read: ${(error as Error).message}` }
+    }
+  }
+
+  /**
    * Draft, test and replay a change, ask for approval, then write it.
    * @param request - the change.
    * @param cwd - project directory of the session.
    * @param history - source of past calls.
-   * @param ask - shows the prompt and returns the user's answer.
+   * @param ask - shows the prompt (full text, and the compact form for the desktop card) and returns the answer.
    */
-  async apply(request: DraftRequest, cwd: string, history: HistorySource | undefined, ask: (prompt: string) => Promise<ApprovalAnswer>): Promise<ApplyResult> {
+  async apply(request: DraftRequest, cwd: string, history: HistorySource | undefined, ask: (prompt: string, display: string) => Promise<AskAnswer>): Promise<ApplyResult> {
     const draft = await this.draft(request, cwd)
     if (!draft.ok) return { applied: false, outcome: 'refused', message: `Not applied: ${draft.problems.join('; ')}`, draft }
     const test = this.test(draft)
@@ -430,9 +488,9 @@ export class GuardAuthoring {
     }
     const replay = this.replay(draft, past)
     const prompt = approvalPrompt(draft, test, replay)
-    const answer = await ask(prompt)
+    const answer = await ask(prompt, approvalDisplay(draft, test, replay))
     if (answer !== 'allowed-once') {
-      return { applied: false, outcome: answer, message: `Not applied: the approval was ${answer}.`, draft, test, replay, prompt }
+      return { applied: false, outcome: answer, message: APPROVAL_FAILURE[answer] ?? `Not applied: the approval was ${String(answer)}.`, draft, test, replay, prompt }
     }
     const nowText = existsSync(draft.file) ? readFileSync(draft.file, 'utf8') : undefined
     if (nowText !== draft.baseText) {
@@ -528,6 +586,55 @@ export function approvalPrompt(draft: DraftResult, test: TestResult, replay: Rep
     replayText(replay),
     'Approve to write the file.',
   ].join('\n')
+}
+
+/** One line, capped. */
+function oneLine(text: string, max: number): string {
+  const line = text.replace(/\s+/g, ' ').trim()
+  return line.length > max ? `${line.slice(0, max - 1)}…` : line
+}
+
+/**
+ * Compact one-paragraph approval text for the desktop app, which shows the
+ * reason as a single headline and collapses newlines: a headline with the
+ * operation, rule id, layer and mode, then the rule, the example results,
+ * the replay hits and the file as sections separated by ` | `.
+ * @param draft - successful draft.
+ * @param test - its example run.
+ * @param replay - its replay.
+ */
+export function approvalDisplay(draft: DraftResult, test: TestResult, replay: ReplayResult): string {
+  const verb = draft.op === 'add' ? 'Add' : draft.op === 'modify' ? 'Change' : draft.entry === undefined ? 'Remove' : 'Disable'
+  const rule = draft.effective
+  const off = draft.op === 'remove' || draft.entry?.disabled === true
+  const mode = off || rule === undefined
+    ? undefined
+    : isObserve(rule) ? `OBSERVE (warns now, ${rule.promote_to} after review)` : `ENFORCE ${rule.action}`
+  const parts = [`dsh-guard: ${verb} rule ${draft.id} · ${draft.layer} layer${mode !== undefined ? ` · ${mode}` : ''}`]
+  if (!off && rule !== undefined) {
+    const match = Object.entries(rule.match).map(([field, patterns]) => `${field} ${oneLine(patterns.join(' OR '), 160)}`).join('; ')
+    parts.push(`Rule: ${rule.when === 'post_tool' ? 'after ' : ''}${rule.tool.join(', ')}${match !== '' ? `; ${match}` : ''}; message "${oneLine(rule.message, 120)}"`)
+    parts.push(`Examples: ${test.passed} passed, ${test.failures.length} failed`)
+  } else if (draft.entry?.disabled === true) {
+    parts.push(`Switched off: ${oneLine(String(draft.entry.reason ?? ''), 120)}`)
+  }
+  const hits = replay.samples.slice(0, 3).map(sample => `[${sample.change}] ${sample.tool}: ${oneLine(sample.summary, 60)}`)
+  const more = replay.firing + replay.noLongerFiring - hits.length
+  const counts = `fires on ${replay.firing}${replay.action !== undefined ? ` as ${replay.action}` : ''}, newly ${replay.newlyFiring}, no longer ${replay.noLongerFiring}`
+  parts.push(`Replay of ${replay.scanned} past calls: ${counts}${hits.length > 0 ? `; ${hits.join('; ')}${more > 0 ? `; ${more} more` : ''}` : ''}`)
+  parts.push(`File: ${draft.file}`)
+  return parts.join(' | ')
+}
+
+/** Human-readable result of guard_propose: one verdict line, then draft, examples and replay. */
+export function proposeText(result: ProposeResult): string {
+  const { draft, test, replay, replayNote } = result
+  if (!draft.ok || test === undefined) return `Proposal NOT READY: the draft has problems; fix them and call guard_propose again.\n${draftText(draft)}`
+  const fires = replay === undefined ? 'replay unavailable' : `replay fires on ${replay.firing} of ${replay.scanned} past call(s), ${replay.newlyFiring} new`
+  const head = test.ok
+    ? `Proposal READY: draft OK, ${test.passed} example(s) pass, ${fires}. Show the user the rule and the replay hits; call guard_apply with the same arguments once the user agrees.`
+    : `Proposal NOT READY: the examples fail (${test.failures.length} failed${test.problems.length > 0 ? `, ${test.problems.length} problem(s)` : ''}); fix the rule or its examples and call guard_propose again.`
+  return [head, draftText(draft), testText(test), replay !== undefined ? replayText(replay) : replayNote ?? ''].filter(part => part !== '').join('\n')
 }
 
 /** Draft input for promoting an observe-mode rule to its `promote_to` action. */

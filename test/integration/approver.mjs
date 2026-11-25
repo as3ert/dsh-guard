@@ -10,7 +10,7 @@ export const name = 'dsh-guard-it-approver'
 export function apply(ctx) {
   ctx.on('approval/request', async req => {
     const file = process.env.DSH_GUARD_IT_APPROVALS
-    if (file) appendFileSync(file, `${JSON.stringify({ toolName: req.toolName, callId: req.callId ?? null, reason: req.reason ?? null })}\n`)
+    if (file) appendFileSync(file, `${JSON.stringify({ toolName: req.toolName, callId: req.callId ?? null, reason: req.reason ?? null, display: req.displayReason?.en ?? null })}\n`)
     return 'allowed-once'
   })
 }

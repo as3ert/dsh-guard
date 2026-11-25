@@ -52,7 +52,8 @@ rules:
     message: Fixture path ask.
     examples:
       block:
-        - fixture-area/data.txt
+        - { file_path: fixture-area/data.txt, content: x }
+        - { tool: edit, input: { file_path: fixture-area/data.txt, old_string: a, new_string: b } }
       pass:
-        - fixture-area/data.template
-        - elsewhere/data.txt
+        - { file_path: fixture-area/data.template, content: x }
+        - { file_path: elsewhere/data.txt, content: x }

@@ -5,10 +5,10 @@ import { isObserve } from './authoring.ts'
 import { builtinRules } from './builtin.ts'
 import { defaultOptions, protectedPaths } from './core.ts'
 import { evaluate, redact, ruleFires } from './engine.ts'
-import { runExamples } from './examples.ts'
+import { exampleCall, runExamples } from './examples.ts'
 import { defaultUserDir, loadRules } from './loader.ts'
 import { defaultLogPath } from './log.ts'
-import { looksCatastrophic } from './regex.ts'
+import { looksCatastrophic, tokenPrefixRemark, unboundedTokenPrefixes } from './regex.ts'
 import { readLogStats } from './stats.ts'
 import { viewOf } from './tools.ts'
 import type { LoadOptions } from './loader.ts'
@@ -19,7 +19,7 @@ const USAGE = `Usage: dsh-guard <command> [options]
 Commands:
   test                 run every rule's examples; exit 1 on any mismatch
   explain '<json>'     show which rules fire on one tool call
-  lint                 check schema, regexes and overrides, name the user rule directory;
+  lint                 check schema, regexes, example forms and overrides, name the user rule directory;
                        exit 1 on errors or warnings
   stats                observe-mode rules with would-have counts and false-positive candidates
 
@@ -172,6 +172,17 @@ async function cmdLint(args: Args): Promise<number> {
     for (const patterns of Object.values(rule.match)) {
       for (const pattern of patterns) {
         if (looksCatastrophic(pattern)) extra.push({ level: 'warning', file, id: rule.id, message: `pattern may backtrack catastrophically: ${pattern}` })
+      }
+    }
+    if (rule.action === 'redact' || rule.promote_to === 'redact') {
+      for (const pattern of rule.match.output ?? []) {
+        for (const alternative of unboundedTokenPrefixes(pattern)) extra.push({ level: 'warning', file, id: rule.id, message: tokenPrefixRemark(alternative) })
+      }
+    }
+    for (const kind of ['block', 'pass'] as const) {
+      for (const example of rule.examples?.[kind] ?? []) {
+        const { error } = exampleCall(rule, example)
+        if (error !== undefined) extra.push({ level: 'error', file, id: rule.id, message: `${kind} example ${JSON.stringify(example)}: ${error}` })
       }
     }
     if ((rule.examples?.block?.length ?? 0) === 0) extra.push({ level: 'notice', file, id: rule.id, message: 'no block example' })
