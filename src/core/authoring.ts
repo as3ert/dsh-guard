@@ -190,7 +190,7 @@ export function onlyBuiltin(rules: readonly Rule[]): boolean {
 function openRuleFile(text: string | undefined): { doc: Document, seq: YAMLSeq } | { error: string } {
   if (text === undefined || text.trim() === '') {
     const doc = new Document({ rules: [] })
-    doc.commentBefore = ' dsh-guard rules. Change them through guard_apply (guard_draft, guard_test, guard_replay first).'
+    doc.commentBefore = ' dsh-guard rules. Change them through the guard authoring path (propose, then apply with the approval of the user).'
     return { doc, seq: (doc.contents as unknown as { get(key: string, keep: true): YAMLSeq }).get('rules', true) }
   }
   const doc = parseDocument(text)
@@ -369,7 +369,7 @@ export class GuardAuthoring {
         }
       }
       for (const name of effective.tool) {
-        if (name !== 'any' && !(CANONICAL_TOOLS as readonly string[]).includes(name)) notes.push(`tool \`${name}\` is not a canonical tool; it matches only the raw dsh tool of that name`)
+        if (name !== 'any' && !(CANONICAL_TOOLS as readonly string[]).includes(name)) notes.push(`tool \`${name}\` is not a canonical tool; it matches only the raw tool of that name in one harness`)
       }
     }
     return {
@@ -471,8 +471,9 @@ export class GuardAuthoring {
    * @param cwd - project directory of the session.
    * @param history - source of past calls.
    * @param ask - shows the prompt (full text, and the compact form for the desktop card) and returns the answer.
+   * @param approvedBy - approval channel, written to the log record (for example `prompt`).
    */
-  async apply(request: DraftRequest, cwd: string, history: HistorySource | undefined, ask: (prompt: string, display: string) => Promise<AskAnswer>): Promise<ApplyResult> {
+  async apply(request: DraftRequest, cwd: string, history: HistorySource | undefined, ask: (prompt: string, display: string) => Promise<AskAnswer>, approvedBy?: string): Promise<ApplyResult> {
     const draft = await this.draft(request, cwd)
     if (!draft.ok) return { applied: false, outcome: 'refused', message: `Not applied: ${draft.problems.join('; ')}`, draft }
     const test = this.test(draft)
@@ -516,7 +517,7 @@ export class GuardAuthoring {
       this.core.invalidate()
       return { applied: false, outcome: 'failed', message: `Not applied: after writing, ${draft.file} did not load as drafted; the previous content was restored.`, draft, test, replay, prompt }
     }
-    this.core.note({ tool: 'guard_apply', input: { path: draft.file }, cwd }, draft.id, `authoring-${draft.op}`)
+    this.core.note({ tool: 'guard_apply', input: { path: draft.file }, cwd }, draft.id, `authoring-${draft.op}`, undefined, approvedBy !== undefined ? { reason: `approved-by: ${approvedBy}` } : {})
     const state = off
       ? draft.entry === undefined ? 'removed' : 'switched off'
       : `${draft.op === 'add' ? 'added' : 'changed'}; in force as action ${rule?.action}${rule?.promote_to !== undefined ? ` (observe mode, promote_to ${rule.promote_to})` : ''}`
@@ -552,12 +553,19 @@ export function testText(test: TestResult): string {
   return lines.join('\n')
 }
 
-/** Human-readable draft summary. */
-export function draftText(draft: DraftResult): string {
+/** Where the dsh adapter points for the rule format. */
+export const DSH_FORMAT_HINT = 'the rule format and a complete example are in the dsh-guard rule reference of the system prompt.'
+
+/**
+ * Human-readable draft summary.
+ * @param draft - the draft.
+ * @param hint - where the rule format is described, shown when the draft fails.
+ */
+export function draftText(draft: DraftResult, hint = DSH_FORMAT_HINT): string {
   const lines = [`Draft ${draft.op} ${draft.id} in the ${draft.layer} layer (${draft.file}): ${draft.ok ? 'OK' : 'NOT OK'}`]
   for (const problem of draft.problems) lines.push(`  problem: ${problem}`)
   for (const note of draft.notes) lines.push(`  note: ${note}`)
-  if (!draft.ok && draft.op !== 'remove') lines.push('  hint: the rule format and a complete example are in the dsh-guard rule reference of the system prompt.')
+  if (!draft.ok && draft.op !== 'remove') lines.push(`  hint: ${hint}`)
   if (draft.entry !== undefined) lines.push('Entry written to the file:', yamlText([draft.entry]).replace(/^/gm, '  '))
   else if (draft.op === 'remove' && draft.ok) lines.push('The entry is deleted from the file.')
   if (draft.effective !== undefined) lines.push('Rule in force after the change:', yamlText([specOf(draft.effective)]).replace(/^/gm, '  '))
@@ -626,15 +634,27 @@ export function approvalDisplay(draft: DraftResult, test: TestResult, replay: Re
   return parts.join(' | ')
 }
 
+/** Wording of the propose verdict line for one adapter. */
+export interface ProposeWords {
+  /** How to propose again, for example `call guard_propose again`. */
+  readonly again: string
+  /** How to apply, for example `call guard_apply with the same arguments`. */
+  readonly apply: string
+  /** Where the rule format is described. */
+  readonly hint: string
+}
+
+const DSH_PROPOSE_WORDS: ProposeWords = { again: 'call guard_propose again', apply: 'call guard_apply with the same arguments', hint: DSH_FORMAT_HINT }
+
 /** Human-readable result of guard_propose: one verdict line, then draft, examples and replay. */
-export function proposeText(result: ProposeResult): string {
+export function proposeText(result: ProposeResult, words: ProposeWords = DSH_PROPOSE_WORDS): string {
   const { draft, test, replay, replayNote } = result
-  if (!draft.ok || test === undefined) return `Proposal NOT READY: the draft has problems; fix them and call guard_propose again.\n${draftText(draft)}`
+  if (!draft.ok || test === undefined) return `Proposal NOT READY: the draft has problems; fix them and ${words.again}.\n${draftText(draft, words.hint)}`
   const fires = replay === undefined ? 'replay unavailable' : `replay fires on ${replay.firing} of ${replay.scanned} past call(s), ${replay.newlyFiring} new`
   const head = test.ok
-    ? `Proposal READY: draft OK, ${test.passed} example(s) pass, ${fires}. Show the user the rule and the replay hits; call guard_apply with the same arguments once the user agrees.`
-    : `Proposal NOT READY: the examples fail (${test.failures.length} failed${test.problems.length > 0 ? `, ${test.problems.length} problem(s)` : ''}); fix the rule or its examples and call guard_propose again.`
-  return [head, draftText(draft), testText(test), replay !== undefined ? replayText(replay) : replayNote ?? ''].filter(part => part !== '').join('\n')
+    ? `Proposal READY: draft OK, ${test.passed} example(s) pass, ${fires}. Show the user the rule and the replay hits; ${words.apply} once the user agrees.`
+    : `Proposal NOT READY: the examples fail (${test.failures.length} failed${test.problems.length > 0 ? `, ${test.problems.length} problem(s)` : ''}); fix the rule or its examples and ${words.again}.`
+  return [head, draftText(draft, words.hint), testText(test), replay !== undefined ? replayText(replay) : replayNote ?? ''].filter(part => part !== '').join('\n')
 }
 
 /** Draft input for promoting an observe-mode rule to its `promote_to` action. */

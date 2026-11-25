@@ -17,6 +17,7 @@ import type { HistorySource } from '../core/history.ts'
 import { listText as coreListText } from '../core/text.ts'
 import type { Rule } from '../core/types.ts'
 import { sessionHistory } from './history.ts'
+import { NO_RULES_TEXT } from './text.ts'
 import type { SessionQueryLike } from './history.ts'
 
 /** Shipped guidance for the agent, also registered as a system-prompt section. */
@@ -86,10 +87,7 @@ function requestOf(args: { op: string, layer: string, rule?: unknown, id?: strin
   }
 }
 
-/** Shown by guard_list while no rule file defines any rule. */
-export const NO_RULES_TEXT = 'No guard rules exist yet: dsh-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. '
-  + 'The user can describe in this conversation what should be guarded (which calls to block, ask about or warn on, and which similar calls must keep working); '
-  + 'turn that into a first rule with guard_propose and guard_apply. The rule object format and a complete example are in the dsh-guard section of the system prompt; do not search the filesystem for a schema.'
+export { NO_RULES_TEXT } from './text.ts'
 
 /** One line per rule for guard_list. */
 export function listText(rules: readonly Rule[], logPath: string, filter: { layer?: string, observeOnly?: boolean } = {}): string {

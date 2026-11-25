@@ -11,7 +11,7 @@ export type LayerName = 'packs' | 'user' | 'project' | 'local' | 'extra' | 'buil
 
 /** One tool call as the engine sees it, independent of dsh types. */
 export interface ToolCall {
-  /** Raw dsh tool name, for example `bash`, `pwsh`, `read`. */
+  /** Raw tool name, for example `bash` or `read` (dsh), `Bash` or `Read` (Claude Code). */
   readonly tool: string
   /** Parsed tool arguments. */
   readonly input: Readonly<Record<string, unknown>>
@@ -19,6 +19,11 @@ export interface ToolCall {
   readonly output?: string
   /** Working directory of the calling session, when known. */
   readonly cwd?: string
+  /**
+   * Harness context matchable as fields when the input has no field of that
+   * name, for example `agent_type`, `permission_mode` or `mcp_source`.
+   */
+  readonly context?: Readonly<Record<string, string>>
 }
 
 /** Signature of an optional `check: <module>:<fn>` hook. Must be synchronous. */

@@ -1,18 +1,23 @@
-/** Map raw dsh tool calls onto canonical tool names and fields. @module */
+/**
+ * Map raw tool calls of every supported harness onto canonical tool names and
+ * fields. dsh names its tools in lower case (`bash`, `edit`), Claude Code in
+ * title case (`Bash`, `Edit`), so one table serves both without collisions.
+ * @module
+ */
 import type { CallView, ToolCall } from './types.ts'
 
 /** Canonical tool names a rule may name in `tool:`. */
 export const CANONICAL_TOOLS = ['shell', 'edit', 'write', 'read', 'fetch', 'search'] as const
 
-const SHELL_TOOLS = new Set(['bash', 'pwsh', 'terminal_send', 'shell'])
-const EDIT_TOOLS = new Set(['edit', 'apply_patch'])
-const WRITE_TOOLS = new Set(['write'])
-const READ_TOOLS = new Set(['read', 'read_image'])
-const FETCH_TOOLS = new Set(['web_fetch', 'fetch'])
-const SEARCH_TOOLS = new Set(['web_search', 'grep', 'glob', 'search'])
+const SHELL_TOOLS = new Set(['bash', 'pwsh', 'terminal_send', 'shell', 'Bash', 'PowerShell', 'Monitor'])
+const EDIT_TOOLS = new Set(['edit', 'apply_patch', 'Edit', 'MultiEdit', 'NotebookEdit'])
+const WRITE_TOOLS = new Set(['write', 'Write'])
+const READ_TOOLS = new Set(['read', 'read_image', 'Read'])
+const FETCH_TOOLS = new Set(['web_fetch', 'fetch', 'WebFetch'])
+const SEARCH_TOOLS = new Set(['web_search', 'grep', 'glob', 'search', 'WebSearch', 'Grep', 'Glob'])
 
 /**
- * Canonical name of a raw dsh tool call.
+ * Canonical name of a raw tool call.
  * @param tool - raw tool name.
  * @param input - parsed arguments; `str_replace_editor` is split by its `command`.
  * @returns the canonical name, or the raw name when the tool is unknown.
@@ -97,9 +102,10 @@ export function viewOf(call: ToolCall): CallView {
         const paths = fields.patch === undefined ? undefined : patchPaths(fields.patch)
         if (paths !== undefined) fields.path = paths
       } else {
-        set('path', input.file_path, input.path)
-        set('old', input.old_string, input.old_str)
-        set('new', input.new_string, input.new_str)
+        const edits = Array.isArray(input.edits) ? input.edits as Record<string, unknown>[] : undefined
+        set('path', input.file_path, input.path, input.notebook_path)
+        set('old', input.old_string, input.old_str, edits?.map(edit => edit?.old_string))
+        set('new', input.new_string, input.new_str, edits?.map(edit => edit?.new_string), input.new_source)
       }
       break
     case 'write':
@@ -117,6 +123,7 @@ export function viewOf(call: ToolCall): CallView {
       break
   }
   if (fields.path !== undefined) fields.path = normalizePath(fields.path)
+  for (const [key, value] of Object.entries(call.context ?? {})) if (fields[key] === undefined) fields[key] = value
   if (call.output !== undefined) fields.output = call.output
   if (call.cwd !== undefined) fields.cwd = normalizePath(call.cwd)
   return {

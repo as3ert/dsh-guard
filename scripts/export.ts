@@ -262,6 +262,53 @@ function scanFile(path: string, text: string | undefined, checks: readonly Check
   return findings
 }
 
+/** The checks of one export or pack run: built-in, private patterns, private rule overlap. */
+export function scanSetup(args: ExportArgs): { checks: Check[], owner?: PrivateRules } {
+  const checks: Check[] = [...BUILTIN_CHECKS]
+  let rulesDir = args.rulesDir ?? process.env.DSH_GUARD_PRIVATE_RULES
+  if (args.privatePatterns) {
+    const file = args.patterns ?? process.env.DSH_GUARD_EXPORT_PATTERNS ?? resolve(REPO, '..', 'dsh-guard-rules', 'export-scan.txt')
+    if (!existsSync(file)) {
+      throw new Error(`private pattern file not found: ${file}; pass --patterns <file>, or --no-private-patterns to run only the built-in checks`)
+    }
+    checks.push(...privateChecks(file))
+    rulesDir ??= join(dirname(file), 'rules')
+  }
+  const owner = rulesDir !== undefined && existsSync(rulesDir) ? privateRules(rulesDir) : undefined
+  if (args.rulesDir !== undefined && owner === undefined) throw new Error(`private rule folder not found: ${args.rulesDir}`)
+  return { checks, ...owner !== undefined ? { owner } : {} }
+}
+
+/**
+ * Scan an assembled tree in place (the Claude Code release folder) with the
+ * checks of {@link scanSetup}; YAML files are not allowed in it at all.
+ * `vendored` lists folders (relative, with `/`) whose files may name the
+ * addresses of their own package.json. Prints every finding; returns their number.
+ */
+export function scanTree(root: string, args: ExportArgs, vendored: readonly string[] = []): number {
+  const { checks } = scanSetup(args)
+  const files = walk(root, root, false).map(path => path.replace(/\\/g, '/')).sort()
+  const findings: Finding[] = []
+  const addresses = new Map<string, ReadonlySet<string>>()
+  for (const dir of vendored) {
+    const manifest = join(root, dir, 'package.json')
+    addresses.set(dir, new Set(existsSync(manifest) ? readFileSync(manifest, 'utf8').match(EMAIL) ?? [] : []))
+  }
+  for (const path of files) {
+    const bytes = readFileSync(join(root, path))
+    const text = bytes.includes(0) ? undefined : bytes.toString('utf8')
+    const own = vendored.find(dir => path.startsWith(`${dir}/`))
+    findings.push(...scanFile(path, text, checks, own === undefined ? undefined : addresses.get(own)).filter(finding => !finding.label.startsWith('YAML file')))
+    if (/\.ya?ml$/i.test(path) && own === undefined) findings.push({ file: path, line: 0, label: 'YAML file in the Claude Code release', match: path })
+  }
+  for (const finding of findings) {
+    const shown = finding.match.length > 60 ? `${finding.match.slice(0, 59)}…` : finding.match
+    console.log(`LEFTOVER ${finding.file}${finding.line > 0 ? `:${finding.line}` : ''}: ${finding.label}: ${shown}`)
+  }
+  console.log(`dsh-guard scan: ${files.length} files in ${root}, ${checks.length} checks, ${findings.length} leftovers${findings.length > 0 ? '; NOT clean' : '; clean'}`)
+  return findings.length
+}
+
 /**
  * Copy the publishable tree into `args.clean` and scan the copy; returns the exit code.
  * Throws on a usage error (target inside the checkout or not empty, pattern file missing).
@@ -275,19 +322,7 @@ export function exportClean(args: ExportArgs): number {
   if (target === REPO || target.startsWith(`${REPO}${sep}`)) throw new Error('the export directory must lie outside the checkout')
   if (existsSync(target) && readdirSync(target).length > 0) throw new Error(`the export directory is not empty: ${target}`)
 
-  const checks: Check[] = [...BUILTIN_CHECKS]
-  let rulesDir = args.rulesDir ?? process.env.DSH_GUARD_PRIVATE_RULES
-  if (args.privatePatterns) {
-    const file = args.patterns ?? process.env.DSH_GUARD_EXPORT_PATTERNS ?? resolve(REPO, '..', 'dsh-guard-rules', 'export-scan.txt')
-    if (!existsSync(file)) {
-      throw new Error(`private pattern file not found: ${file}; pass --patterns <file>, or --no-private-patterns to run only the built-in checks`)
-    }
-    checks.push(...privateChecks(file))
-    rulesDir ??= join(dirname(file), 'rules')
-  }
-  const owner = rulesDir !== undefined && existsSync(rulesDir) ? privateRules(rulesDir) : undefined
-  if (args.rulesDir !== undefined && owner === undefined) throw new Error(`private rule folder not found: ${args.rulesDir}`)
-
+  const { checks, owner } = scanSetup(args)
   const vendored = args.withDeps ? runtimeDependencies() : []
   const files = publishableFiles(args.withDist, vendored)
   const findings: Finding[] = []

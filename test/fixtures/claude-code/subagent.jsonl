@@ -1,0 +1,1 @@
+{"type": "assistant", "sessionId": "00000000-0000-4000-8000-000000000001", "cwd": "/work/demo", "isSidechain": true, "entrypoint": "cli", "timestamp": "2026-01-01T10:00:06.000Z", "agentId": "fixture", "message": {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_fixture_04", "name": "Bash", "input": {"command": "npm publish"}}]}}
