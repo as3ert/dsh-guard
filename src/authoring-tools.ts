@@ -40,7 +40,7 @@ const CHANGE_PARAMETERS = {
   rule: { type: 'json', description: 'add: the complete rule object (id, tool, match, action, message, examples.block, examples.pass, optional doc, when, override). modify: id plus the fields to change. Same fields as the YAML rule files.' },
   id: { type: 'string', description: 'Rule id for remove.' },
   reason: { type: 'string', description: 'remove of a rule defined in a lower layer: why it is switched off (written as disabled: true).' },
-  mode: { type: 'string', enum: ['observe', 'enforce'], description: 'add only. observe (default): the rule is written as action warn with promote_to set to the drafted action. enforce: only when the user explicitly asked for it.' },
+  mode: { type: 'string', enum: ['observe', 'enforce'], description: 'add only. observe (default): the rule is written as action warn with promote_to set to the drafted action. enforce: only when the user explicitly asked for immediate enforcement ("enforce", "immediately"); a plain "do not let you X" is not that. Recommend observe to the user for a new rule: a fresh regex can be too wide or too narrow.' },
 } as const
 
 /** Turn validated tool arguments into a draft request. */
@@ -67,7 +67,7 @@ function requestOf(args: { op: string, layer: string, rule?: unknown, id?: strin
 /** Shown by guard_list while no rule file defines any rule. */
 export const NO_RULES_TEXT = 'No guard rules exist yet: dsh-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. '
   + 'The user can describe in this conversation what should be guarded (which calls to block, ask about or warn on, and which similar calls must keep working); '
-  + 'turn that into a first rule with guard_draft, guard_test, guard_replay and guard_apply.'
+  + 'turn that into a first rule with guard_draft, guard_test, guard_replay and guard_apply. The rule object format and a complete example are in the dsh-guard section of the system prompt; do not search the filesystem for a schema.'
 
 /** One line per rule for guard_list. */
 export function listText(rules: readonly Rule[], logPath: string, filter: { layer?: string, observeOnly?: boolean } = {}): string {

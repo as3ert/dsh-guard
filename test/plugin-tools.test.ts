@@ -114,3 +114,20 @@ describe('authoring tools', () => {
     assert.equal(prompts.length, 0)
   })
 })
+
+describe('guidance rule reference', () => {
+  it('shows a complete example rule that passes guard_test and recommends observe mode', async () => {
+    const { run, sections } = await setup('allowed-once')
+    const text = sections[0].text
+    assert.match(text, /do not search the filesystem/)
+    assert.match(text, /recommended choice/)
+    const json = /```json\r?\n([\s\S]*?)\r?\n```/.exec(text)?.[1]
+    assert.ok(json !== undefined, 'guidance contains a json example')
+    const rule = JSON.parse(json) as Record<string, unknown>
+    const out = await run('guard_test', { op: 'add', layer: 'user', rule })
+    assert.doesNotMatch(out, /NOT OK|problem:/)
+    assert.match(out, /Draft add canary-delete/)
+    const bad = await run('guard_draft', { op: 'add', layer: 'user', rule: { id: 'x', bogus: 1 } })
+    assert.match(bad, /hint: the rule format/)
+  })
+})

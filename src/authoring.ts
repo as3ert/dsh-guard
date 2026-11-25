@@ -499,6 +499,7 @@ export function draftText(draft: DraftResult): string {
   const lines = [`Draft ${draft.op} ${draft.id} in the ${draft.layer} layer (${draft.file}): ${draft.ok ? 'OK' : 'NOT OK'}`]
   for (const problem of draft.problems) lines.push(`  problem: ${problem}`)
   for (const note of draft.notes) lines.push(`  note: ${note}`)
+  if (!draft.ok && draft.op !== 'remove') lines.push('  hint: the rule format and a complete example are in the dsh-guard rule reference of the system prompt.')
   if (draft.entry !== undefined) lines.push('Entry written to the file:', yamlText([draft.entry]).replace(/^/gm, '  '))
   else if (draft.op === 'remove' && draft.ok) lines.push('The entry is deleted from the file.')
   if (draft.effective !== undefined) lines.push('Rule in force after the change:', yamlText([specOf(draft.effective)]).replace(/^/gm, '  '))
