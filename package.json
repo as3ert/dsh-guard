@@ -1,0 +1,50 @@
+{
+  "name": "dsh-guard",
+  "version": "0.1.0",
+  "description": "Declarative guard rules for DeepSeek Harness tool calls: block, ask, warn and redact",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "dsh-guard": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "packs",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "scripts": {
+    "build": "tsc -p .",
+    "typecheck": "tsc -p . --noEmit",
+    "test": "node --test test/loader.test.ts test/engine.test.ts test/plugin.test.ts",
+    "test:integration": "npm run build && node --test test/integration/headless.test.ts",
+    "guard:test": "node src/cli.ts test --no-user",
+    "guard:lint": "node src/cli.ts lint --no-user"
+  },
+  "dependencies": {
+    "yaml": "2.9.1"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "~4.1.0",
+    "@deepseek-ai/schemastery": "~3.19.0",
+    "@deepseek-ai/dsh-llm": "0.2.2-rc.5",
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.5"
+  },
+  "devDependencies": {
+    "@deepseek-ai/dsh": "0.2.2-rc.5",
+    "@types/node": "24.19.3",
+    "typescript": "5.9.3"
+  }
+}

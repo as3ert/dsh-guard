@@ -1,0 +1,17 @@
+# Rules used only by the headless integration test.
+rules:
+  - id: it.block
+    tool: shell
+    match: { command: dsh-guard-it-block-marker }
+    action: block
+    message: integration block marker
+  - id: it.ask
+    tool: shell
+    match: { command: dsh-guard-it-ask-marker }
+    action: ask
+    message: integration ask marker
+  - id: it.warn
+    tool: read
+    match: { path: 'notes\.txt$' }
+    action: warn
+    message: integration warn notes
