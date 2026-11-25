@@ -71,6 +71,9 @@ function main(): number {
   build()
   mkdirSync(tree, { recursive: true })
   cpSync(PLUGIN, tree, { recursive: true })
+  // A checkout with CRLF conversion would break the shebang of the POSIX launcher.
+  const launcher = join(tree, 'bin', 'dsh-guard')
+  writeFileSync(launcher, readFileSync(launcher, 'utf8').replaceAll('\r\n', '\n'))
   const manifestFile = join(tree, '.claude-plugin', 'plugin.json')
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as Record<string, unknown>
   writeFileSync(manifestFile, `${JSON.stringify({ ...manifest, version: root.version }, null, 2)}\n`)

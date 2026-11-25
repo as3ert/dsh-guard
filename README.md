@@ -2,7 +2,7 @@
 
 dsh-guard is a plugin for [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) that checks every tool call the agent makes against declarative rules. A rule names a tool, gives regular expressions over the call's input or output, and states what happens on a match: the call is blocked, the user is asked first, the model receives a warning, or matching text in the tool output is masked before the model sees it. Rules live in YAML files. The plugin ships no rules: after installation every call passes, except those the built-in self-protection rule stops, until the user creates rules, usually by describing them to the agent in a conversation (see Authoring rules in conversation).
 
-Tested against `@deepseek-ai/dsh` 0.2.2-rc.5 on Node.js 24.
+Tested against `@deepseek-ai/dsh` 0.2.2-rc.5 on Node.js 24. The same engine and rule files also run in Claude Code as a plugin; see [Claude Code](#claude-code).
 
 ## How it hooks into dsh
 
@@ -293,11 +293,94 @@ The command is not on `PATH` (see Install); run it as `node dist/cli.js <command
 dsh-guard test                 # run every rule's examples; exit 1 on a mismatch or a load error
 dsh-guard lint                 # schema, regexes, overrides, risky patterns; exit 1 on errors or warnings
 dsh-guard stats                # observe-mode rules: would-have counts, false-positive candidates, promotion hints
+dsh-guard list                 # rules in force with layers, actions and log counts (--layer <layer>, --observe)
 dsh-guard explain '{"tool": "bash", "input": {"command": "git push -f"}}'
 dsh-guard explain '{"tool": "read", "input": {"file_path": "x"}, "output": "sk-..."}'
 ```
 
 `explain` lists each field it extracted, each rule of the phase with its result, the final verdict, and the masked output of redact rules. It also accepts a dsh `tool/call` record (`{"name": ..., "arguments": "<json string>"}`). Options: `--cwd <dir>` selects the project, `--no-user` skips `~/.dsh-guard`, `--user-dir <dir>`, `--packs a,b` (rule files or directories, none by default), `--rules <file>` (repeatable), `--phase pre_tool|post_tool` for `explain`, and `--log <file>` and `--all` (every rule with log records) for `stats`. `test` and `lint` include the built-in rules; `lint` also prints the user rule directory it read.
+
+## Claude Code
+
+The Claude Code adapter is a Claude Code plugin built from the same engine: the rule format, the layers, observe mode, the decision log and the self-protection rule are shared, so one rule directory serves both harnesses. It runs as command hooks, one Node.js process per event, plus the `dsh-guard` command line for authoring. Tested with Claude Code 2.1.332 on Windows; the plugin declares `engines.claude-code >=2.1.323`.
+
+### Requirements and install
+
+- Node.js 24 or later on `PATH` for Claude Code's hook processes and the Bash tool. If `node` is missing, the plugin's SessionStart hook says so in the session, and each tool hook fails visibly with a hook error; the calls are then not checked (see Fail mode).
+- Build the release folder from a checkout: `npm ci`, then `npm run pack:claude-code -- --out <dir>`. It writes `<dir>/dsh-guard-claude-code-<version>/` (the plugin: manifest, hooks, skill, `bin/` launchers, compiled `dist/`, the vendored `yaml`), the same folder as a zip, and `<dir>/.claude-plugin/marketplace.json`, which lists the folder as the marketplace `dsh-guard-local`. The folder is scanned like the dsh export; the plugin ships no rules.
+- Try it for one session without installing: `claude --plugin-dir <dir>/dsh-guard-claude-code-<version>`.
+- Install from the local marketplace: `claude plugin marketplace add <dir>`, then `/plugin install dsh-guard@dsh-guard-local` (or `claude plugin install dsh-guard@dsh-guard-local`). A local-path marketplace loads the folder in place, so keep `<dir>` where it is, and do not point a marketplace at the checkout itself, whose `plugin/claude-code/` has no `dist/`.
+- Private marketplace: commit the built folder and `.claude-plugin/marketplace.json` to a private Git repository (for example a release branch) and add that repository with `claude plugin marketplace add <owner>/<repo>`; each machine then installs and updates from it.
+- Install the plugin in one way only: a plugin hook and an identical hook in a settings file both run.
+
+### Rule locations and configuration
+
+The adapter reads its configuration from the environment, so a value set in the `env` block of a Claude Code settings file reaches the hooks and the command line alike.
+
+| variable | meaning | default |
+|---|---|---|
+| `DSH_GUARD_HOME` | user rule directory (`*.yaml`) | `~/.dsh-guard`, shared with dsh |
+| `DSH_GUARD_LOG` | decision log; empty disables it | `<DSH_GUARD_HOME>/log.jsonl` |
+| `DSH_GUARD_STATE` | pending rule changes | `<DSH_GUARD_HOME>/state` |
+| `DSH_GUARD_PACKS`, `DSH_GUARD_RULES` | rule files or directories loaded before the user layer, and after the local layer (separated by the path delimiter) | none |
+| `DSH_GUARD_PROTECT` | further files or directories the self-protection rule guards | none |
+| `DSH_GUARD_FAIL_MODE` | `open` or `closed`, for internal errors and an exhausted time budget | `open` |
+| `DSH_GUARD_TIME_BUDGET_MS` | evaluation budget per call and phase | 250 |
+
+Project rules live in `<project>/.dsh-guard/` and `<project>/.dsh-guard.local/`, as in dsh (see Layers). Rules written against canonical tools apply in both harnesses; a rule naming a raw tool of one harness never matches in the other.
+
+### Tools and fields in Claude Code
+
+| canonical | Claude Code tools | fields |
+|---|---|---|
+| `shell` | `Bash`, `PowerShell` (and Monitor commands) | `command` |
+| `edit` | `Edit`, `MultiEdit` (all `edits[]` joined), `NotebookEdit` | `path`, `old`, `new` |
+| `write` | `Write` | `path`, `content` |
+| `read` | `Read` | `path` |
+| `fetch` | `WebFetch` | `url` |
+| `search` | `WebSearch`, `Grep`, `Glob` | `query` (query or pattern), `path` |
+| raw name | `Agent`, `Skill`, `CronCreate`, `mcp__<server>__<tool>`, ... | the raw input fields |
+
+Paths arrive absolute; backslashes become `/`. Every rule can also match the context fields `agent_type` (in a subagent), `permission_mode` and, for MCP tools, `mcp_source` and `mcp_server`. The `output` of a post_tool rule is every string of the structured tool result, one per line.
+
+### Actions in Claude Code
+
+| action | hook | effect |
+|---|---|---|
+| `block` | PreToolUse `deny` | The call never runs, in every permission mode; Claude reads `Blocked by dsh-guard: [id] message`. |
+| `ask` | PreToolUse `deny` | Claude Code's permission prompt is never used. The call is refused with the rule's message, and Claude is told to ask the user in the chat and, only after the user agrees, to repeat the shell command with `# guard: allow <reason>`. The comment passes every `ask` rule (no `override: true` needed) but works only on shell commands; for other tools Claude has to ask how to proceed. |
+| `warn` | `additionalContext` | The call runs; the notice appears beside the result (observe-mode rules use the observe wording). |
+| `redact` | PostToolUse `updatedToolOutput` | Every match in every string of the result is replaced with `[REDACTED:<id>]`, keeping the structure of the result, so the model and the transcript see the masked text. For a large output that Claude Code saved to a file and replaced by a preview, the saved file is masked in place as well. |
+| post_tool `block` | PostToolUse `updatedToolOutput` | The content of the result is replaced by the rule message. |
+
+The guard never answers `allow`, so it neither adds nor removes any of Claude Code's own prompts.
+
+### Authoring and approval in Claude Code
+
+The plugin ships the skill `dsh-guard:guard-authoring`, which gives Claude the procedure and the rule format. Claude writes a change request (the JSON object the dsh tools take) to a file and runs `dsh-guard propose --request <file>` until it reports READY, shows the user the rule and the replay hits, and after the user agrees runs `dsh-guard apply --request <file>`. `apply` checks everything again and stores the change as pending; it writes nothing.
+
+The change is approved by a code the user types, without a dialog. Right after `apply`, the plugin's PostToolUse hook shows the user a line such as `To apply this rule change, type exactly:  guard approve k3f9qz`; Claude does not receive this line. When the user sends exactly `guard approve <code>` as a prompt, the UserPromptSubmit hook re-drafts the change, checks that the target file has not changed since `apply`, writes it, logs `authoring-<op>` with `approved-by: prompt`, and tells Claude the outcome. Codes are random, stored only as salted hashes, valid for 30 minutes and usable once. Claude Code also delivers some automated text as prompts (background subagent reports, scheduled tasks, messages from other sessions): a wrapped notification never equals the bare phrase, and the self-protection rule blocks every tool call whose input contains `guard approve <code>`, so Claude cannot schedule, send or script an approval. Run in a terminal outside Claude Code, `dsh-guard apply` asks for `yes` instead.
+
+### Command line in Claude Code
+
+`dsh-guard` is on the Bash tool's `PATH` while the plugin is enabled (`bin/dsh-guard`, and `bin/dsh-guard.cmd` for PowerShell and `cmd`); elsewhere run `node <plugin>/dist/claude-code/cli.js`. Commands: `list`, `test`, `lint`, `stats`, `explain '<json>'` (a Claude Code hook input such as `{"tool_name": "Bash", "tool_input": {"command": "..."}}`), and `draft`, `replay`, `propose`, `apply` with `--request <file>` or `--request-json '<json>'`. `replay` reads the transcripts under `<CLAUDE_CONFIG_DIR or ~/.claude>/projects` read-only: the newest 200 transcript files of the current project (`--all-projects` for all, `--sessions <n>`, `--projects-dir <dir>`), subagent transcripts included, at most 500 calls; lines it cannot parse are counted and skipped.
+
+### Self-protection in Claude Code
+
+Besides the rule directories, the decision log and the guard's code, the built-in rule `dsh-guard.self-protect` blocks writes (Write, Edit, MultiEdit, NotebookEdit, and shell commands that look like writes) to the state directory, the installed plugin tree, the `plugins/` directory of the Claude Code configuration, `settings.json` and `settings.local.json` of the configuration directory and of the `.claude/` folder of any project, and the paths in `DSH_GUARD_PROTECT`; shell commands that disable or remove the plugin (`claude plugin disable|uninstall|remove ... dsh-guard`); and any tool call that carries an approval phrase. Reading stays allowed.
+
+### Fail mode in Claude Code
+
+A hook that hits an internal error answers with a `systemMessage` to the user ("this call was NOT checked") and a notice to Claude, and logs `internal-error-open`; with `DSH_GUARD_FAIL_MODE=closed` a PreToolUse error denies the call instead. A hook that cannot start at all (no `node`, a broken install) or times out is a non-blocking hook error in Claude Code, shown in the transcript. `npm run pack:claude-code -- --out <dir> --fail-closed` builds a variant whose PreToolUse handler sets `onFailure: "block"`, so such a failure blocks every tool call until it is fixed.
+
+### Limits in Claude Code
+
+- Failed calls (PostToolUseFailure) cannot be rewritten: a redact match in an error message reaches the model, which receives a notice to treat it as secret.
+- The final answer of a background subagent arrives as a task notification, not as a tool result, and is not masked; the subagent's own tool calls are checked and masked as usual.
+- Files inserted with `@` in a prompt pass no hook; set `CLAUDE_CODE_DISABLE_FILE_MENTIONS=1` when redact rules guard secrets, and guard secret files with a pre_tool `block` on reading them rather than relying on redaction.
+- Pressing `Esc` during a call cancels its PostToolUse hook, so its output is not masked.
+- The approval code is hidden from Claude's context but recorded in the transcript file with the hook's output; reading it back is possible, submitting it is blocked as described above.
+- Not in this release: a ConfigChange hook, an external confirmation channel for `ask` and approvals, and a per-rule `harness:` field.
 
 ## Development
 
@@ -310,6 +393,7 @@ npm run guard:test        # dsh-guard test on the synthetic rules in test/fixtur
 npm run guard:lint
 npm run export -- --clean <dir>  # copy the publishable tree to <dir> and scan it for leftovers
 npm run pack:zip -- --out <dir>  # rebuild dist/, export and scan it with dist/ and yaml, write <dir>/dsh-guard-<version>.zip
+npm run pack:claude-code -- --out <dir> [--fail-closed]  # build and scan the Claude Code plugin folder, zip and local marketplace
 ```
 
 `test/fixtures/rules/` holds a handful of synthetic rules (one per action, `not_path`, an override comment, a content/edit/output pattern) used only to exercise the engine; they are not loaded by the plugin and protect nothing. `scripts/export.ts` is a development script and is not part of the package. Besides its built-in checks (absolute home paths, email addresses other than noreply placeholders, YAML files outside `test/fixtures/rules/`, and fixture rules that reuse an id or a regex of a private rule folder given with `--rules-dir <dir>` or `DSH_GUARD_PRIVATE_RULES`, by default a `rules` folder beside the pattern file), it reads a private pattern file with one regular expression per line, given with `--patterns <file>` or `DSH_GUARD_EXPORT_PATTERNS`; `--no-private-patterns` skips it. A failed scan removes the copy and exits with 1. `--with-dist` adds the built `dist/` and `--with-deps` the runtime dependencies from `node_modules/` to the copy and the scan; a vendored file may contain only those email addresses that its own `package.json` names. `scripts/pack.ts` runs the export with both, so the zip contains exactly the scanned tree, and refuses to pack when the installed `yaml` differs from the version in `package-lock.json`.
