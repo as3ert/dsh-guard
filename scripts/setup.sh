@@ -71,7 +71,7 @@ if [ "$PM" = npm ]; then
   npm run build $Q
 else
   "$NODE" "$PNPM_CJS" install --silent --ignore-scripts --config.node-linker=hoisted
-  "$NODE" "$PNPM_CJS" run build $Q --config.verify-deps-before-run=false
+  "$NODE" "$PNPM_CJS" --config.verify-deps-before-run=false $Q run build
 fi
 
 if [ "$BUILDONLY" = 1 ]; then echo "dsh-guard rebuilt; restart the DeepSeek Harness app"; exit 0; fi

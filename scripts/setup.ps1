@@ -77,7 +77,7 @@ try {
   Say "Using node $(& $node -p 'process.versions.node') with $pm"
   $q = if ($BuildOnly) { @('--silent') } else { @() }
   if ($pm -eq 'npm') { RunPm (@('ci') + $q) } else { RunPm (@('install', '--silent', '--ignore-scripts', '--config.node-linker=hoisted')) }
-  RunPm (@('run', 'build') + $q + $(if ($pm -eq 'pnpm') { '--config.verify-deps-before-run=false' }))
+  if ($pm -eq 'npm') { RunPm (@('run', 'build') + $q) } else { RunPm (@('--config.verify-deps-before-run=false') + $q + @('run', 'build')) }
 } finally { Pop-Location }
 
 if ($BuildOnly) { Write-Host 'dsh-guard rebuilt; restart the DeepSeek Harness app'; exit 0 }
