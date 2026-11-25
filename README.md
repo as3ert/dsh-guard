@@ -29,20 +29,89 @@ Rules can also be written by hand into the rule directories (see Layers), or sha
 
 ## Install
 
-The package is not published yet. Build it from a checkout:
+dsh-guard is not published to npm. It is shared as a zip, `dsh-guard-<version>.zip`, or built from a checkout. The zip holds one folder, `dsh-guard-<version>/`, with the built plugin (`dist/`) and its only runtime dependency (`node_modules/yaml`), so installing it needs neither Node.js nor npm. Unpack it to a place where it can stay: `dsh plugin add` links the folder instead of copying it, so moving or deleting the folder later breaks the profile.
+
+The commands below use `0.1.0` for `<version>`. In every variant, `plugin add` prints a pnpm warning that the linked package's peer dependencies (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-tools`) will not resolve from the target `node_modules`. The warning is expected and harmless: these packages are part of dsh and are resolved from the running installation.
+
+### Quick start: DeepSeek Harness desktop app
+
+The desktop app contains a command-line launcher with its own Node.js and pnpm:
+
+| OS | launcher |
+|---|---|
+| Windows | `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd` |
+| macOS | `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh` (inferred from the Windows layout, not verified) |
+
+Windows, in PowerShell:
+
+```powershell
+$dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
+& $dsh plugin --profile desktop add C:\path\to\dsh-guard-0.1.0
+```
+
+macOS, in a terminal:
 
 ```sh
-npm install
+dsh="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
+"$dsh" plugin --profile desktop add /path/to/dsh-guard-0.1.0
+```
+
+Quit and restart the app; it loads the plugin on its next start. The `desktop` profile belongs to the app: it cannot be booted from the command line (dsh reports that it is managed exclusively by the Electron application), so check the installation inside the app (see Verify that it is loaded) or try the plugin in a separate headless profile first (see Try it in a headless session).
+
+### Quick start: dsh installed from npm
+
+With `@deepseek-ai/dsh` installed from npm, `dsh plugin` forwards to pnpm, which must then be on `PATH` (a missing pnpm fails with `'pnpm' is not recognized` or `command not found`). Add the plugin to a profile that ships with dsh, for example `headless`:
+
+```sh
+dsh plugin --profile headless add /path/to/dsh-guard-0.1.0
+```
+
+For a shipped profile name, `plugin add` first initializes the profile from its template. For a new profile name it creates a bare profile that boots nothing; create such a profile from a template first, as shown in Try it in a headless session.
+
+### Building from source
+
+Building needs Node.js 24.9 or later with npm; dsh itself loads only the built `dist/`.
+
+```sh
+npm ci
 npm run build
+dsh plugin --profile headless add /path/to/dsh-guard
 ```
 
-The package is a dsh bundle (`dsh.bundle` in `package.json`, layer `cordis.patch.yml`), so it can be installed into a profile. `dsh plugin` runs pnpm, which must be on `PATH`:
+A checkout provides `yaml` from its own `node_modules`. `npm run pack:zip -- --out <dir>` builds the release zip (see Development).
+
+### Verify that it is loaded
 
 ```sh
-dsh plugin --profile tui add /path/to/dsh-guard
+dsh --profile headless --dump-config
 ```
 
-This links the checkout, appends `dsh-guard` to the profile's bundles and mounts the row `dsh-guard` with the default configuration; override its `config` in the profile's own `cordis.patch.yml`. Alternatively, add a row to a profile overlay, for example `$DSH_HOME/profiles/tui/cordis.patch.yml`, or pass a file with `dsh tui --patch guard.yml`:
+prints the composed profile; a loaded plugin shows the layer `# == dsh-guard` with the row `- id: dsh-guard`. In a session, including the desktop app, ask the agent "what guard rules do I have?". It answers with `guard_list`, which, before any rule exists, reports that no guard rules exist yet and lists only the built-in rule `dsh-guard.self-protect`.
+
+### Try it in a headless session
+
+A separate profile keeps the app's own profile untouched. With the desktop app on Windows, use `& $dsh` from the quick start in place of `dsh`:
+
+```sh
+dsh guardtest --from-default-profile headless --dump-config
+dsh plugin --profile guardtest add /path/to/dsh-guard-0.1.0
+dsh --profile guardtest --dump-config
+dsh --profile guardtest --patch /path/to/dsh-guard-0.1.0/examples/headless-account.yml "Call guard_list and quote its reply."
+```
+
+The first command creates the profile `guardtest` from the shipped `headless` template and prints it; the second adds the plugin; the third shows the `dsh-guard` row. The fourth runs one task. The headless template turns off the DeepSeek account that the desktop app signs in to; `examples/headless-account.yml` turns it back on and selects the account's model. With an API key instead, set `DEEPSEEK_API_KEY` in the environment and leave out `--patch`. Without either, the task fails with `MISSING_CREDENTIAL` (for the provider `deepseek-official`) or `ACCOUNT_SIGN_IN_REQUIRED`. A headless session has no approval channel, so `ask` rules deny and `guard_apply` cannot write a rule there; create rules in the app or another interactive profile. To remove the test profile, delete the folder `guardtest` below `$DSH_HOME/profiles` (by default `~/.dsh/profiles`).
+
+### Rule directory and decision log
+
+User rules are the `*.yaml` files in `~/.dsh-guard` (on Windows `%USERPROFILE%\.dsh-guard`); the decision log `log.jsonl` lies in the same directory. The environment variable `DSH_GUARD_HOME` replaces this directory for both, and must be set in the environment of the process that runs dsh, so for the desktop app before the app starts. In the plugin configuration, `userDir` takes precedence for the rules and `logPath` for the log. Project rules live in `<project>/.dsh-guard/` and `<project>/.dsh-guard.local/` (see Layers). `node dist/cli.js lint` prints the line `user rule directory: <dir>`, the directory the command line uses; it follows `DSH_GUARD_HOME` but does not read the plugin configuration.
+
+### Command line
+
+`plugin add` does not put the `dsh-guard` command on `PATH`, and a build does not either. Run it with Node.js 24.9 or later from the package folder, for example `node dist/cli.js lint`; in a checkout, `npm run guard:test` and `npm run guard:lint` run it on the synthetic fixture rules. The commands are described in Command line below.
+
+### Configuration
+
+`plugin add` appends `dsh-guard` to the profile's bundles and mounts the row `dsh-guard` with the default configuration; override its `config` in the profile's own `cordis.patch.yml` (for example `$DSH_HOME/profiles/headless/cordis.patch.yml`). Without `plugin add`, insert a row in a profile overlay, or pass a file with `dsh --profile headless --patch guard.yml`:
 
 ```yaml
 - insert:
@@ -209,11 +278,9 @@ The built-in rule `dsh-guard.self-protect` blocks generic tools from changing th
 
 The rule loads after every layer, cannot be overridden or disabled, and has `override: false`. Only `guard_apply`, after an approval, writes rule files. Like every regex rule it sees text, not intent: a script that writes the files indirectly passes the shell check.
 
-### Settings card
-
-`src/settings.ts` provides the data and actions of a settings card: the rules per layer with their on/off state where a layer may switch them (a pack rule from the user layer, a project rule from the local layer, built-in and `extraRuleFiles` rules never), the log counts, and the observe-mode rules with a promotion request. While no rule file defines a rule, the snapshot is marked `empty` and carries a hint that rules are created by describing them in a conversation. Every switch and promotion is a change request for `GuardAuthoring.apply`, with the same checks and the same prompt as `guard_apply`. The browser half of the card is not shipped yet; see Limitations.
-
 ## Command line
+
+The command is not on `PATH` (see Install); run it as `node dist/cli.js <command>` from the package folder.
 
 ```sh
 dsh-guard test                 # run every rule's examples; exit 1 on a mismatch or a load error
@@ -223,7 +290,7 @@ dsh-guard explain '{"tool": "bash", "input": {"command": "git push -f"}}'
 dsh-guard explain '{"tool": "read", "input": {"file_path": "x"}, "output": "sk-..."}'
 ```
 
-`explain` lists each field it extracted, each rule of the phase with its result, the final verdict, and the masked output of redact rules. It also accepts a dsh `tool/call` record (`{"name": ..., "arguments": "<json string>"}`). Options: `--cwd <dir>` selects the project, `--no-user` skips `~/.dsh-guard`, `--user-dir <dir>`, `--packs a,b` (rule files or directories, none by default), `--rules <file>` (repeatable), `--phase pre_tool|post_tool` for `explain`, and `--log <file>` and `--all` (every rule with log records) for `stats`. `test` and `lint` include the built-in rules.
+`explain` lists each field it extracted, each rule of the phase with its result, the final verdict, and the masked output of redact rules. It also accepts a dsh `tool/call` record (`{"name": ..., "arguments": "<json string>"}`). Options: `--cwd <dir>` selects the project, `--no-user` skips `~/.dsh-guard`, `--user-dir <dir>`, `--packs a,b` (rule files or directories, none by default), `--rules <file>` (repeatable), `--phase pre_tool|post_tool` for `explain`, and `--log <file>` and `--all` (every rule with log records) for `stats`. `test` and `lint` include the built-in rules; `lint` also prints the user rule directory it read.
 
 ## Development
 
@@ -235,9 +302,10 @@ node test/integration/plugin-add.ts  # manual: dsh plugin add into a temporary p
 npm run guard:test        # dsh-guard test on the synthetic rules in test/fixtures/rules
 npm run guard:lint
 npm run export -- --clean <dir>  # copy the publishable tree to <dir> and scan it for leftovers
+npm run pack:zip -- --out <dir>  # rebuild dist/, export and scan it with dist/ and yaml, write <dir>/dsh-guard-<version>.zip
 ```
 
-`test/fixtures/rules/` holds a handful of synthetic rules (one per action, `not_path`, an override comment, a content/edit/output pattern) used only to exercise the engine; they are not loaded by the plugin and protect nothing. `scripts/export.ts` is a development script and is not part of the package. Besides its built-in checks (absolute home paths, email addresses other than noreply placeholders, YAML files outside `test/fixtures/rules/`, and fixture rules that reuse an id or a regex of a private rule folder given with `--rules-dir <dir>` or `DSH_GUARD_PRIVATE_RULES`, by default a `rules` folder beside the pattern file), it reads a private pattern file with one regular expression per line, given with `--patterns <file>` or `DSH_GUARD_EXPORT_PATTERNS`; `--no-private-patterns` skips it. A failed scan removes the copy and exits with 1.
+`test/fixtures/rules/` holds a handful of synthetic rules (one per action, `not_path`, an override comment, a content/edit/output pattern) used only to exercise the engine; they are not loaded by the plugin and protect nothing. `scripts/export.ts` is a development script and is not part of the package. Besides its built-in checks (absolute home paths, email addresses other than noreply placeholders, YAML files outside `test/fixtures/rules/`, and fixture rules that reuse an id or a regex of a private rule folder given with `--rules-dir <dir>` or `DSH_GUARD_PRIVATE_RULES`, by default a `rules` folder beside the pattern file), it reads a private pattern file with one regular expression per line, given with `--patterns <file>` or `DSH_GUARD_EXPORT_PATTERNS`; `--no-private-patterns` skips it. A failed scan removes the copy and exits with 1. `--with-dist` adds the built `dist/` and `--with-deps` the runtime dependencies from `node_modules/` to the copy and the scan; a vendored file may contain only those email addresses that its own `package.json` names. `scripts/pack.ts` runs the export with both, so the zip contains exactly the scanned tree, and refuses to pack when the installed `yaml` differs from the version in `package-lock.json`.
 
 Sources run directly on Node.js 24 type stripping; `npm run build` emits `dist/` for dsh.
 
@@ -248,5 +316,4 @@ Sources run directly on Node.js 24 type stripping; `npm run build` emits `dist/`
 - A post-execute listener that replaces a result's canonical `value` hides the rendered content from redact and post_tool rules.
 - The time budget is checked between rules; one slow regex is not interrupted. `dsh-guard lint` warns about nested quantifiers.
 - `check` hooks must be synchronous.
-- The settings card has no browser half yet. A third-party plugin cannot add a Host Remote to the Web client: the client reaches Host services only through the generated Typert contributions that `@deepseek-ai/dsh-api-remotes` selects, and a package's browser half is attached only to a Loader row named by the bare package name. `ctx.approval.request` also requires an open agent turn, so a card button cannot raise the same approval outside a conversation; the card's actions need a confirmation dialog of the surface that hosts them.
 - Replay reads at most the newest 200 sessions and 500 calls, uses each session's starting directory for project rules, and skips calls without a recorded result for post_tool rules.

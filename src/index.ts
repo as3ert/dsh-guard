@@ -224,7 +224,6 @@ export function apply(ctx: Context, config: Config): void {
 
 export { GuardCore } from './core.ts'
 export { GuardAuthoring } from './authoring.ts'
-export { settingsSnapshot } from './settings.ts'
 export { evaluate, redact, overrideReason } from './engine.ts'
 export { loadRules } from './loader.ts'
 export type { Rule, RuleSet, ToolCall, Verdict } from './types.ts'

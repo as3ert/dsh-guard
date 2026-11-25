@@ -11,7 +11,9 @@
  * rules that reuse an id or a regex of a private rule folder, and the
  * patterns of a private pattern file (one regex per line, kept outside this
  * repository). On a finding the copy is deleted (unless `--keep`) and the
- * exit code is 1.
+ * exit code is 1. `scripts/pack.ts` reuses {@link exportClean} with the built
+ * `dist/` and the runtime dependencies included, so the same checks run on the
+ * shipped tree.
  *
  * Options:
  *   --clean <dir>           target directory; must be missing or empty and outside the checkout
@@ -22,6 +24,10 @@
  *                           private pattern file when it exists)
  *   --no-private-patterns   run only the built-in checks (no private pattern file)
  *   --keep                  keep the copy when the scan fails
+ *   --with-dist             also copy and scan the built `dist/` (git-ignored; run `npm run build` first)
+ *   --with-deps             also copy and scan the runtime `dependencies` (not the dsh peers) into
+ *                           `node_modules/`, so the tree loads after `dsh plugin add` without an
+ *                           install; a vendored file may name the addresses its own package.json names
  * @module
  */
 import { spawnSync } from 'node:child_process'
@@ -35,14 +41,16 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
 /** Directories never exported, at any depth. */
 const SKIP_DIRS = new Set(['.git', '.tools', 'node_modules', 'dist', 'coverage'])
-/** Files never exported: logs, decision logs and packed tarballs. */
-const SKIP_FILE = /\.(log|jsonl|tgz)$/i
+/** Files never exported: logs, decision logs, packed tarballs and zips. */
+const SKIP_FILE = /\.(log|jsonl|tgz|zip)$/i
 /**
  * YAML files allowed in the publishable tree: the synthetic fixture rules, the
- * integration rules, and the dsh bundle layer, which holds no rules.
+ * integration rules, the dsh bundle layer and the example profile overlay;
+ * the last two hold no rules.
  */
 function yamlAllowed(path: string): boolean {
-  return path.startsWith('test/fixtures/rules/') || path === 'test/fixtures/integration-rules.yaml' || path === 'cordis.patch.yml'
+  return path.startsWith('test/fixtures/rules/') || path === 'test/fixtures/integration-rules.yaml' ||
+    path === 'cordis.patch.yml' || path === 'examples/headless-account.yml'
 }
 
 interface Check {
@@ -52,28 +60,36 @@ interface Check {
   readonly allow?: (match: string) => boolean
 }
 
+const EMAIL_CHECK: Check = {
+  label: 'email address',
+  pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/,
+  allow: match => /no-?reply/i.test(match),
+}
+
 /** Checks that need no private knowledge; safe to publish with this script. */
 const BUILTIN_CHECKS: readonly Check[] = [
   { label: 'Windows profile path', pattern: /\b[A-Za-z]:[\\/]{1,2}Users[\\/]{1,2}/i },
   { label: 'macOS home path', pattern: /\/Users\/[A-Za-z0-9._-]+/ },
   { label: 'home path other than /home/user', pattern: /\/home\/(?!user\b)[A-Za-z0-9._-]+/ },
-  {
-    label: 'email address',
-    pattern: /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/,
-    allow: match => /no-?reply/i.test(match),
-  },
+  EMAIL_CHECK,
 ]
 
-interface Args {
+/** Options of {@link exportClean}; the command-line flags map onto them one to one. */
+export interface ExportArgs {
   clean?: string
   patterns?: string
   rulesDir?: string
   privatePatterns: boolean
   keep: boolean
+  /** Copy and scan the built `dist/` as well. */
+  withDist: boolean
+  /** Copy and scan the runtime dependencies into `node_modules/` as well. */
+  withDeps: boolean
 }
 
-function parseArgs(argv: string[]): Args {
-  const args: Args = { privatePatterns: true, keep: false }
+/** Parse the export flags; `pack.ts` passes its remaining flags through here. */
+export function parseArgs(argv: string[]): ExportArgs {
+  const args: ExportArgs = { privatePatterns: true, keep: false, withDist: false, withDeps: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     const value = (): string => {
@@ -87,31 +103,72 @@ function parseArgs(argv: string[]): Args {
     else if (arg === '--rules-dir') args.rulesDir = resolve(value())
     else if (arg === '--no-private-patterns') args.privatePatterns = false
     else if (arg === '--keep') args.keep = true
+    else if (arg === '--with-dist') args.withDist = true
+    else if (arg === '--with-deps') args.withDeps = true
     else throw new Error(`unknown argument: ${arg}`)
   }
   return args
 }
 
+/** A runtime dependency copied into the tree: its folder and the addresses its own package.json names. */
+interface Vendored { readonly dir: string, readonly addresses: ReadonlySet<string> }
+
+const EMAIL = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}/g
+
+/**
+ * Runtime dependencies of the checkout, followed through their own `dependencies`, as
+ * folders below `node_modules/`; each installed version must equal the one in
+ * `package-lock.json`. The dsh packages are peers and are never vendored.
+ */
+function runtimeDependencies(): Vendored[] {
+  const lock = JSON.parse(readFileSync(join(REPO, 'package-lock.json'), 'utf8')) as { packages: Record<string, { version?: string }> }
+  const out = new Map<string, Vendored>()
+  const visit = (name: string): void => {
+    const dir = `node_modules/${name}`
+    if (out.has(dir)) return
+    const manifest = join(REPO, dir, 'package.json')
+    if (!existsSync(manifest)) throw new Error(`runtime dependency ${name} is not installed; run \`npm ci\` first`)
+    const text = readFileSync(manifest, 'utf8')
+    const pkg = JSON.parse(text) as { version: string, dependencies?: Record<string, string> }
+    const locked = lock.packages[dir]?.version
+    if (locked !== pkg.version) throw new Error(`${dir} is ${pkg.version} but package-lock.json pins ${locked ?? 'nothing'}; run \`npm ci\` first`)
+    out.set(dir, { dir, addresses: new Set(text.match(EMAIL) ?? []) })
+    for (const dep of Object.keys(pkg.dependencies ?? {})) visit(dep)
+  }
+  const root = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { dependencies?: Record<string, string> }
+  for (const name of Object.keys(root.dependencies ?? {})) visit(name)
+  return [...out.values()]
+}
+
 /** Files of the publishable tree, relative to the checkout, with forward slashes. */
-function publishableFiles(): string[] {
+function publishableFiles(withDist: boolean, vendored: readonly Vendored[]): string[] {
   const git = spawnSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], {
     cwd: REPO, encoding: 'utf8', env: { ...process.env, GIT_TERMINAL_PROMPT: '0', GCM_INTERACTIVE: 'never' },
   })
   const listed = git.status === 0 ? git.stdout.split('\0').filter(path => path !== '') : walk(REPO)
-  return listed
+  const source = listed
     .map(path => path.replace(/\\/g, '/'))
     .filter(path => !path.split('/').some(part => SKIP_DIRS.has(part)))
+  // dist/ is git-ignored and skipped above; --with-dist adds the top-level build output back.
+  if (withDist) {
+    const dist = join(REPO, 'dist')
+    if (!existsSync(join(dist, 'index.js'))) throw new Error('dist/index.js is missing; run `npm run build` first')
+    source.push(...walk(dist, REPO).map(path => path.replace(/\\/g, '/')))
+  }
+  // Vendored packages are copied whole, their own dist/ folders included.
+  for (const { dir } of vendored) source.push(...walk(join(REPO, dir), REPO, false).map(path => path.replace(/\\/g, '/')))
+  return source
     .filter(path => !SKIP_FILE.test(path))
     .filter(path => existsSync(join(REPO, path)) && statSync(join(REPO, path)).isFile())
     .sort()
 }
 
-/** Fallback without git: every file below a directory. */
-function walk(root: string, base = root): string[] {
+/** Every file below a directory (also the fallback without git); `skip` leaves out {@link SKIP_DIRS}. */
+function walk(root: string, base = root, skip = true): string[] {
   const out: string[] = []
   for (const entry of readdirSync(root, { withFileTypes: true })) {
     if (entry.isDirectory()) {
-      if (!SKIP_DIRS.has(entry.name)) out.push(...walk(join(root, entry.name), base))
+      if (!skip || !SKIP_DIRS.has(entry.name)) out.push(...walk(join(root, entry.name), base, skip))
     } else if (entry.isFile()) out.push(relative(base, join(root, entry.name)))
   }
   return out
@@ -179,13 +236,13 @@ interface Finding {
 }
 
 /** Scan one exported file: its path and, for text files, every line. */
-function scanFile(path: string, text: string | undefined, checks: readonly Check[]): Finding[] {
+function scanFile(path: string, text: string | undefined, checks: readonly Check[], allowed: ReadonlySet<string> = new Set()): Finding[] {
   const findings: Finding[] = []
   const test = (subject: string, line: number) => {
     for (const check of checks) {
       const flags = check.pattern.flags.includes('g') ? check.pattern.flags : `${check.pattern.flags}g`
       for (const match of subject.matchAll(new RegExp(check.pattern.source, flags))) {
-        if (check.allow?.(match[0]) === true) continue
+        if (check.allow?.(match[0]) === true || (check === EMAIL_CHECK && allowed.has(match[0]))) continue
         findings.push({ file: path, line, label: check.label, match: match[0] })
       }
     }
@@ -199,10 +256,13 @@ function scanFile(path: string, text: string | undefined, checks: readonly Check
   return findings
 }
 
-function main(): number {
-  const args = parseArgs(process.argv.slice(2))
+/**
+ * Copy the publishable tree into `args.clean` and scan the copy; returns the exit code.
+ * Throws on a usage error (target inside the checkout or not empty, pattern file missing).
+ */
+export function exportClean(args: ExportArgs): number {
   if (args.clean === undefined) {
-    console.error('usage: dsh-guard export --clean <dir> [--patterns <file> | --no-private-patterns] [--rules-dir <dir>] [--keep]')
+    console.error('usage: dsh-guard export --clean <dir> [--patterns <file> | --no-private-patterns] [--rules-dir <dir>] [--with-dist] [--with-deps] [--keep]')
     return 2
   }
   const target = args.clean
@@ -222,7 +282,8 @@ function main(): number {
   const owner = rulesDir !== undefined && existsSync(rulesDir) ? privateRules(rulesDir) : undefined
   if (args.rulesDir !== undefined && owner === undefined) throw new Error(`private rule folder not found: ${args.rulesDir}`)
 
-  const files = publishableFiles()
+  const vendored = args.withDeps ? runtimeDependencies() : []
+  const files = publishableFiles(args.withDist, vendored)
   const findings: Finding[] = []
   for (const path of files) {
     const from = join(REPO, path)
@@ -231,7 +292,8 @@ function main(): number {
     copyFileSync(from, to)
     const bytes = readFileSync(to)
     const text = bytes.includes(0) ? undefined : bytes.toString('utf8')
-    findings.push(...scanFile(path, text, checks))
+    const own = vendored.find(({ dir }) => path.startsWith(`${dir}/`))
+    findings.push(...scanFile(path, text, checks, own?.addresses))
     if (owner !== undefined && text !== undefined) findings.push(...fixtureOverlap(path, text, owner))
   }
 
@@ -249,9 +311,11 @@ function main(): number {
   return 0
 }
 
-try {
-  process.exitCode = main()
-} catch (error) {
-  console.error(`dsh-guard export: ${(error as Error).message}`)
-  process.exitCode = 2
+if (import.meta.main) {
+  try {
+    process.exitCode = exportClean(parseArgs(process.argv.slice(2)))
+  } catch (error) {
+    console.error(`dsh-guard export: ${(error as Error).message}`)
+    process.exitCode = 2
+  }
 }

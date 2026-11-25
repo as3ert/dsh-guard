@@ -19,12 +19,13 @@ const USAGE = `Usage: dsh-guard <command> [options]
 Commands:
   test                 run every rule's examples; exit 1 on any mismatch
   explain '<json>'     show which rules fire on one tool call
-  lint                 check schema, regexes and overrides; exit 1 on errors or warnings
+  lint                 check schema, regexes and overrides, name the user rule directory;
+                       exit 1 on errors or warnings
   stats                observe-mode rules with would-have counts and false-positive candidates
 
 Options:
   --cwd <dir>          project directory (default: current directory)
-  --no-user            skip the user layer (~/.dsh-guard)
+  --no-user            skip the user layer ($DSH_GUARD_HOME, else ~/.dsh-guard)
   --user-dir <dir>     user rule directory
   --packs <a,b>        rule files or directories loaded before the user layer (default: none)
   --rules <file>       extra rule file, loaded last (repeatable)
@@ -182,6 +183,7 @@ async function cmdLint(args: Args): Promise<number> {
   printIssues(issues)
   const errors = issues.filter(issue => issue.level === 'error').length
   const warnings = issues.filter(issue => issue.level === 'warning').length
+  console.log(`user rule directory: ${args.userDir ?? '(skipped)'}`)
   console.log(`dsh-guard lint: ${set.all.length} rules from ${set.files.length} files, ${errors} errors, ${warnings} warnings`)
   return errors > 0 || warnings > 0 ? 1 : 0
 }

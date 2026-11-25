@@ -1,4 +1,4 @@
-/** Authoring: draft, test, replay, apply, promotion, settings card data, stats and history. */
+/** Authoring: draft, test, replay, apply, promotion, rule on/off, stats and history. */
 import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,7 +8,6 @@ import type { ApprovalAnswer, DraftRequest } from '../src/authoring.ts'
 import { GuardCore } from '../src/core.ts'
 import { sessionHistory } from '../src/history.ts'
 import type { HistoricCall } from '../src/history.ts'
-import { settingsSnapshot, toggleRequest } from '../src/settings.ts'
 import { readLogStats } from '../src/stats.ts'
 import { tempDir, writeTree } from './helpers.ts'
 
@@ -248,53 +247,18 @@ describe('guard_apply', () => {
   })
 })
 
-describe('settings card data', () => {
-  it('lists rules per layer with switches and observe-mode promotions', async () => {
-    const { authoring, cwd, logPath } = setup()
-    await authoring.apply({ op: 'add', layer: 'project', rule: NEW_RULE }, cwd, history([]), answer('allowed-once'))
-    writeFileSync(logPath, `${JSON.stringify({ time: 't1', rule: NEW_RULE.id, verdict: 'warn', summary: 'npm publish' })}\n`, { flag: 'a' })
-    const snapshot = await settingsSnapshot(authoring, cwd)
-    const builtin = snapshot.layers.find(layer => layer.layer === 'builtin')?.rules[0]
-    assert.equal(builtin?.id, 'dsh-guard.self-protect')
-    assert.equal(builtin?.toggleLayer, undefined)
-    const pack = snapshot.layers.find(layer => layer.layer === 'packs')?.rules[0]
-    assert.equal(pack?.toggleLayer, 'user')
-    assert.equal(snapshot.empty, false)
-    const project = snapshot.layers.find(layer => layer.layer === 'project')?.rules[0]
-    assert.equal(project?.toggleLayer, 'local')
-    assert.equal(project?.hits, 1)
-    assert.equal(snapshot.observe.length, 1)
-    assert.equal(snapshot.observe[0].promote.rule?.action, 'block')
-  })
-
-  it('shows the empty state when no rule file defines a rule', async () => {
-    const root = tempDir()
-    writeTree(root, { 'project/.keep': '' })
-    const cwd = join(root, 'project')
-    const core = new GuardCore({ userDir: join(root, 'user'), logPath: '', cwd, dshHome: join(root, 'dsh-home'), reloadIntervalMs: 0 })
-    const snapshot = await settingsSnapshot(new GuardAuthoring(core), cwd)
-    assert.equal(snapshot.empty, true)
-    assert.match(snapshot.hint ?? '', /describe what should be guarded in a conversation/)
-    assert.deepEqual(snapshot.layers.flatMap(layer => layer.rules.map(rule => rule.id)), ['dsh-guard.self-protect'])
-    assert.equal(snapshot.observe.length, 0)
-  })
-
-  it('switches a rule off and on through the same apply path', async () => {
+describe('switching a rule off and on', () => {
+  it('disables a pack rule from the user layer and enables it again through apply', async () => {
     const { authoring, cwd } = setup()
-    const row = (await settingsSnapshot(authoring, cwd)).layers.find(layer => layer.layer === 'packs')?.rules[0]
-    assert.ok(row !== undefined)
-    const off = toggleRequest(row, false)
-    assert.ok(off !== undefined)
+    const enabled = async () => (await authoring.load(cwd)).all.find(rule => rule.id === 'base.push')?.disabled !== true
     const seen: string[] = []
-    assert.equal((await authoring.apply(off, cwd, history([]), answer('allowed-once', seen))).applied, true)
+    const off = await authoring.apply({ op: 'modify', layer: 'user', rule: { id: 'base.push', disabled: true, reason: 'not needed here' } }, cwd, history([]), answer('allowed-once', seen))
+    assert.equal(off.applied, true, off.message)
     assert.match(seen[0], /Change rule base\.push/)
-    const offRow = (await settingsSnapshot(authoring, cwd)).layers.find(layer => layer.layer === 'packs')?.rules[0]
-    assert.equal(offRow?.enabled, false)
-    const on = toggleRequest(offRow!, true)
-    assert.ok(on !== undefined)
-    const applied = await authoring.apply(on, cwd, history([]), answer('allowed-once'))
-    assert.equal(applied.applied, true, applied.message)
-    assert.equal((await settingsSnapshot(authoring, cwd)).layers.find(layer => layer.layer === 'packs')?.rules[0].enabled, true)
+    assert.equal(await enabled(), false)
+    const on = await authoring.apply({ op: 'modify', layer: 'user', rule: { id: 'base.push', disabled: false } }, cwd, history([]), answer('allowed-once'))
+    assert.equal(on.applied, true, on.message)
+    assert.equal(await enabled(), true)
   })
 })
 

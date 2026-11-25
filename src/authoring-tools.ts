@@ -64,7 +64,7 @@ function requestOf(args: { op: string, layer: string, rule?: unknown, id?: strin
   }
 }
 
-/** Shown by guard_list (and the settings card) while no rule file defines any rule. */
+/** Shown by guard_list while no rule file defines any rule. */
 export const NO_RULES_TEXT = 'No guard rules exist yet: dsh-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. '
   + 'The user can describe in this conversation what should be guarded (which calls to block, ask about or warn on, and which similar calls must keep working); '
   + 'turn that into a first rule with guard_draft, guard_test, guard_replay and guard_apply.'

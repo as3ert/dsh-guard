@@ -20,8 +20,11 @@
   "files": [
     "dist",
     "guidance",
+    "examples",
     "cordis.patch.yml",
-    "README.md"
+    "README.md",
+    "TESTING.md",
+    "LICENSE"
   ],
   "engines": {
     "node": ">=24.9.0",
@@ -35,7 +38,8 @@
     "guard:test": "node src/cli.ts test --no-user --packs test/fixtures/rules",
     "guard:lint": "node src/cli.ts lint --no-user --packs test/fixtures/rules",
     "guard:stats": "node src/cli.ts stats",
-    "export": "node scripts/export.ts"
+    "export": "node scripts/export.ts",
+    "pack:zip": "node scripts/pack.ts"
   },
   "dependencies": {
     "yaml": "2.9.1"
