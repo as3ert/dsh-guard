@@ -5,16 +5,31 @@ Thank you for trying dsh-guard. This page covers installing the plugin into the 
 ## Prerequisites
 
 - The DeepSeek Harness desktop app (dsh 0.2.2-rc.5), on Windows or macOS, signed in to a DeepSeek account.
-- The zip `dsh-guard-0.1.0.zip`, unpacked to a folder that stays where it is, for example `C:\Tools\dsh-guard-0.1.0` or `~/Tools/dsh-guard-0.1.0`. The app links this folder; moving or deleting it later breaks the plugin.
 - No Node.js, npm or pnpm for the plugin itself: the app brings its own. The optional command line (`dsh-guard test`, `lint`, `stats`, `explain`, used in item 3 below) is a Node script that needs Node.js 24.9 or later. On Windows you can run it with the node the app bundles, without installing anything (see Command line check below); on macOS this is unverified.
 
-## Install in three commands
+## Install by asking the agent
+
+Open the DeepSeek Harness desktop app and tell its agent:
+
+```
+Install dsh-guard from https://github.com/as3ert/dsh-guard
+```
+
+The agent reads [INSTALL.md](INSTALL.md), runs one installer command, and tells you to quit the app completely and open it again. After the restart, ask the agent "What guard rules do I have?" to check that the plugin loaded. Updating and removing work the same way: "update dsh-guard", "remove dsh-guard". Please report it if the agent does something other than what INSTALL.md describes, or if the installer prints a line starting with `dsh-guard install: ERROR:`.
+
+The installer unpacks the plugin to `%LOCALAPPDATA%\dsh-guard` (Windows) or `~/Library/Application Support/dsh-guard` (macOS) and adds it to the `desktop` profile. The same commands can be run by hand; they are listed in INSTALL.md and in the README under "Installer scripts". The macOS installer has not yet been tried on macOS.
+
+The sections below are the manual alternatives.
+
+## Install from the zip in three commands
+
+Download `dsh-guard-0.1.1.zip` from the [releases page](https://github.com/as3ert/dsh-guard/releases) and unpack it to a folder that stays where it is, for example `C:\Tools\dsh-guard-0.1.1` or `~/Tools/dsh-guard-0.1.1`. The app links this folder; moving or deleting it later breaks the plugin.
 
 Windows, in PowerShell:
 
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add C:\Tools\dsh-guard-0.1.0
+& $dsh plugin --profile desktop add C:\Tools\dsh-guard-0.1.1
 & $dsh --version
 ```
 
@@ -22,7 +37,7 @@ macOS, in a terminal (the path inside the app bundle comes from the app's own co
 
 ```sh
 dsh="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-"$dsh" plugin --profile desktop add ~/Tools/dsh-guard-0.1.0
+"$dsh" plugin --profile desktop add ~/Tools/dsh-guard-0.1.1
 "$dsh" --version
 ```
 
@@ -125,14 +140,14 @@ The log records a summary of each checked call, which can include commands, file
 
 ### Making a test profile (optional)
 
-A separate profile keeps the app's own profile untouched. In PowerShell, with `$dsh` as above and the package at `C:\Tools\dsh-guard-0.1.0` (on macOS use the sh launcher and `~/Tools/dsh-guard-0.1.0`; the form is `dsh --profile <name>`, and a bare first argument is also taken as the profile name):
+A separate profile keeps the app's own profile untouched. In PowerShell, with `$dsh` as above and the package at `C:\Tools\dsh-guard-0.1.1` (on macOS use the sh launcher and `~/Tools/dsh-guard-0.1.1`; the form is `dsh --profile <name>`, and a bare first argument is also taken as the profile name):
 
 ```powershell
 & $dsh --profile guardtest --from-default-profile headless --dump-config
-& $dsh plugin --profile guardtest add C:\Tools\dsh-guard-0.1.0
+& $dsh plugin --profile guardtest add C:\Tools\dsh-guard-0.1.1
 $env:DSH_GUARD_HOME = "$env:USERPROFILE\guardtest-rules"   # optional: separate rules and log
 & $dsh --profile guardtest --dump-config
-& $dsh --profile guardtest --patch C:\Tools\dsh-guard-0.1.0\examples\headless-account.yml "Call guard_list and quote its reply."
+& $dsh --profile guardtest --patch C:\Tools\dsh-guard-0.1.1\examples\headless-account.yml "Call guard_list and quote its reply."
 ```
 
 The first command creates `guardtest` from the shipped `headless` template. The overlay `examples/headless-account.yml` turns the signed-in DeepSeek account back on; with an API key, set `DEEPSEEK_API_KEY` instead and leave out `--patch`. Delete the folder `guardtest` below `~/.dsh/profiles` to remove the profile.

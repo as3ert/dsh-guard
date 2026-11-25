@@ -39,8 +39,8 @@ import { compilePattern } from '../src/core/regex.ts'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-/** Directories never exported, at any depth. */
-const SKIP_DIRS = new Set(['.git', '.tools', 'node_modules', 'dist', 'coverage'])
+/** Directories never exported, at any depth (`.github` holds CI configuration only). */
+const SKIP_DIRS = new Set(['.git', '.github', '.tools', 'node_modules', 'dist', 'coverage'])
 /** Files never exported: logs, decision logs, packed tarballs and zips. */
 const SKIP_FILE = /\.(log|jsonl|tgz|zip)$/i
 /**

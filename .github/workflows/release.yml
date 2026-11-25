@@ -1,0 +1,57 @@
+name: release
+
+# On a pushed tag v<version>: build, test, pack the prebuilt zip and publish it
+# as a GitHub Release with two assets: dsh-guard-<version>.zip and the stable
+# name dsh-guard.zip, which install.ps1 and install.sh download from
+# releases/latest/download/dsh-guard.zip.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Check that the tag matches package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "tag $GITHUB_REF_NAME does not match package.json version $version" >&2
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      - run: npm ci
+      - run: npm run build
+      - run: npm test
+
+      - name: Pack the release zip
+        run: |
+          npm run pack:zip -- --out out --no-private-patterns
+          cp "out/dsh-guard-$VERSION.zip" out/dsh-guard.zip
+          ls -l out
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" "out/dsh-guard-$VERSION.zip" out/dsh-guard.zip --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" "out/dsh-guard-$VERSION.zip" out/dsh-guard.zip \
+              --title "dsh-guard $VERSION" \
+              --notes "Prebuilt plugin for the DeepSeek Harness desktop app. To install, open DeepSeek Harness and tell its agent: Install dsh-guard from https://github.com/$GITHUB_REPOSITORY. Developers: see README.md."
+          fi

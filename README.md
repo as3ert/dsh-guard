@@ -1,5 +1,9 @@
 # dsh-guard
 
+> **To install:** open the DeepSeek Harness desktop app and tell its agent:\
+> `Install dsh-guard from https://github.com/as3ert/dsh-guard`\
+> Then quit the app completely and open it again. Agents follow [INSTALL.md](INSTALL.md).
+
 dsh-guard is a plugin for [DeepSeek Harness](https://www.npmjs.com/package/@deepseek-ai/dsh) (`dsh`) that checks every tool call the agent makes against declarative rules. A rule names a tool, gives regular expressions over the call's input or output, and states what happens on a match: the call is blocked, the user is asked first, the model receives a warning, or matching text in the tool output is masked before the model sees it. Rules live in YAML files. The plugin ships no rules: after installation every call passes, except those the built-in self-protection rule stops, until the user creates rules, usually by describing them to the agent in a conversation (see Authoring rules in conversation).
 
 Tested against `@deepseek-ai/dsh` 0.2.2-rc.5 on Node.js 24. The same engine and rule files also run in Claude Code as a plugin; see [Claude Code](#claude-code).
@@ -29,11 +33,28 @@ Rules can also be written by hand into the rule directories (see Layers), or sha
 
 ## Install
 
-dsh-guard is not published to npm. It is shared as a zip, `dsh-guard-<version>.zip`, or built from a checkout. The zip holds one folder, `dsh-guard-<version>/`, with the built plugin (`dist/`) and its only runtime dependency (`node_modules/yaml`), so installing it needs neither Node.js nor npm. Unpack it to a place where it can stay: `dsh plugin add` links the folder instead of copying it, so moving or deleting the folder later breaks the profile.
+dsh-guard is not published to npm. It is shared as a prebuilt zip on the [GitHub releases page](https://github.com/as3ert/dsh-guard/releases), `dsh-guard-<version>.zip` (the latest release also as `dsh-guard.zip`), or built from a checkout. The zip holds one folder, `dsh-guard-<version>/`, with the built plugin (`dist/`) and its only runtime dependency (`node_modules/yaml`), so installing it needs neither Node.js nor npm. Unpack it to a place where it can stay: `dsh plugin add` links the folder instead of copying it, so moving or deleting the folder later breaks the profile.
 
-The commands below use `0.1.0` for `<version>`. In every variant, `plugin add` prints a pnpm warning that the linked package's peer dependencies (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-tools`) will not resolve from the target `node_modules`. The warning is expected and harmless: these packages are part of dsh and are resolved from the running installation.
+The manual commands below use `0.1.1` for `<version>`. In every variant, `plugin add` prints a pnpm warning that the linked package's peer dependencies (`@deepseek-ai/cordis`, `@deepseek-ai/schemastery`, `@deepseek-ai/dsh-llm`, `@deepseek-ai/dsh-tools`) will not resolve from the target `node_modules`. The warning is expected and harmless: these packages are part of dsh and are resolved from the running installation.
 
-### Quick start: DeepSeek Harness desktop app
+### Installer scripts (recommended)
+
+`install.ps1` (Windows PowerShell 5.1 or later) and `install.sh` (macOS) download the latest release zip, unpack it to a fixed per-user folder (`%LOCALAPPDATA%\dsh-guard` on Windows, `~/Library/Application Support/dsh-guard` on macOS), and add that folder to the `desktop` profile with the app's own `dsh plugin add`. They need nothing beyond the operating system and the desktop app. Running them again updates the plugin in place: the new version is unpacked beside the old one and swapped in, and a profile that already loads the folder is left as it is. This is what the agent runs when a user asks it to install dsh-guard; [INSTALL.md](INSTALL.md) is the agent's step-by-step page.
+
+Windows (PowerShell, cmd or any other shell):
+
+```
+powershell -NoProfile -ExecutionPolicy Bypass -Command "irm https://raw.githubusercontent.com/as3ert/dsh-guard/main/install.ps1 | iex"
+```
+
+macOS (unverified on real hardware):
+
+```
+curl -fsSL https://raw.githubusercontent.com/as3ert/dsh-guard/main/install.sh | sh -s --
+```
+
+Options go after the script: on Windows through `powershell -NoProfile -ExecutionPolicy Bypass -Command "& ([scriptblock]::Create((irm https://raw.githubusercontent.com/as3ert/dsh-guard/main/install.ps1))) -Uninstall"`, on macOS after `sh -s --`. `-Uninstall` (`--uninstall`) removes the plugin from the profile and deletes the install folder, keeping the rules in `~/.dsh-guard`; `-Version <tag>` (`--version <tag>`) installs a given release; `-Profile <name>` (`--profile <name>`) selects another profile, which must exist; `-Dsh <path>` (`--dsh <path>`) names the launcher; `-InstallDir <folder>` (`--install-dir <folder>`) changes the install folder. Quit and restart the app afterwards.
+### Manual install: DeepSeek Harness desktop app
 
 The desktop app contains a command-line launcher with its own Node.js and pnpm:
 
@@ -46,14 +67,14 @@ Windows, in PowerShell:
 
 ```powershell
 $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd"
-& $dsh plugin --profile desktop add C:\path\to\dsh-guard-0.1.0
+& $dsh plugin --profile desktop add C:\path\to\dsh-guard-0.1.1
 ```
 
 macOS, in a terminal:
 
 ```sh
 dsh="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
-"$dsh" plugin --profile desktop add /path/to/dsh-guard-0.1.0
+"$dsh" plugin --profile desktop add /path/to/dsh-guard-0.1.1
 ```
 
 Quit and restart the app; it loads the plugin on its next start. The `desktop` profile belongs to the app: it cannot be booted from the command line (dsh reports that it is managed exclusively by the Electron application), so check the installation inside the app (see Verify that it is loaded) or try the plugin in a separate headless profile first (see Try it in a headless session).
@@ -63,7 +84,7 @@ Quit and restart the app; it loads the plugin on its next start. The `desktop` p
 With `@deepseek-ai/dsh` installed from npm, `dsh plugin` forwards to pnpm, which must then be on `PATH` (a missing pnpm fails with `'pnpm' is not recognized` or `command not found`). Add the plugin to a profile that ships with dsh, for example `headless`:
 
 ```sh
-dsh plugin --profile headless add /path/to/dsh-guard-0.1.0
+dsh plugin --profile headless add /path/to/dsh-guard-0.1.1
 ```
 
 For a shipped profile name, `plugin add` first initializes the profile from its template. For a new profile name it creates a bare profile that boots nothing; create such a profile from a template first, as shown in Try it in a headless session.
@@ -90,13 +111,13 @@ prints the composed profile; a loaded plugin shows the layer `# == dsh-guard` wi
 
 ### Try it in a headless session
 
-A separate profile keeps the app's own profile untouched. With the desktop app on Windows, use `& $dsh` from the quick start in place of `dsh`:
+A separate profile keeps the app's own profile untouched. With the desktop app on Windows, use `& $dsh` from the manual install in place of `dsh`:
 
 ```sh
 dsh --profile guardtest --from-default-profile headless --dump-config
-dsh plugin --profile guardtest add /path/to/dsh-guard-0.1.0
+dsh plugin --profile guardtest add /path/to/dsh-guard-0.1.1
 dsh --profile guardtest --dump-config
-dsh --profile guardtest --patch /path/to/dsh-guard-0.1.0/examples/headless-account.yml "Call guard_list and quote its reply."
+dsh --profile guardtest --patch /path/to/dsh-guard-0.1.1/examples/headless-account.yml "Call guard_list and quote its reply."
 ```
 
 (`dsh <name>` and `dsh --profile <name>` are the same; this document uses `--profile`.) The first command creates the profile `guardtest` from the shipped `headless` template and prints it; the second adds the plugin; the third shows the `dsh-guard` row. The fourth runs one task. The headless template turns off the DeepSeek account that the desktop app signs in to; `examples/headless-account.yml` turns it back on and selects the account's model. With an API key instead, set `DEEPSEEK_API_KEY` in the environment and leave out `--patch`. Without either, the task fails with `MISSING_CREDENTIAL` (for the provider `deepseek-official`) or `ACCOUNT_SIGN_IN_REQUIRED`. A headless session has no approval channel, so `ask` rules deny and `guard_apply` cannot write a rule there; create rules in the app or another interactive profile. To remove the test profile, delete the folder `guardtest` below `$DSH_HOME/profiles` (by default `~/.dsh/profiles`).
@@ -395,6 +416,8 @@ npm run export -- --clean <dir>  # copy the publishable tree to <dir> and scan i
 npm run pack:zip -- --out <dir>  # rebuild dist/, export and scan it with dist/ and yaml, write <dir>/dsh-guard-<version>.zip
 npm run pack:claude-code -- --out <dir> [--fail-closed]  # build and scan the Claude Code plugin folder, zip and local marketplace
 ```
+
+A release is cut by setting the version in `package.json`, `package-lock.json` and `plugin/claude-code/.claude-plugin/plugin.json`, and pushing a tag `v<version>`. `.github/workflows/release.yml` then checks that the tag matches `package.json`, runs `npm ci`, the build and the unit tests, packs the zip with the built-in scan checks (`--no-private-patterns`; run the private scan locally before tagging), and publishes `dsh-guard-<version>.zip` and `dsh-guard.zip` as release assets. The installers download `releases/latest/download/dsh-guard.zip`, so a new release reaches users on their next update. `.github/` is not part of the exported tree.
 
 `test/fixtures/rules/` holds a handful of synthetic rules (one per action, `not_path`, an override comment, a content/edit/output pattern) used only to exercise the engine; they are not loaded by the plugin and protect nothing. `scripts/export.ts` is a development script and is not part of the package. Besides its built-in checks (absolute home paths, email addresses other than noreply placeholders, YAML files outside `test/fixtures/rules/`, and fixture rules that reuse an id or a regex of a private rule folder given with `--rules-dir <dir>` or `DSH_GUARD_PRIVATE_RULES`, by default a `rules` folder beside the pattern file), it reads a private pattern file with one regular expression per line, given with `--patterns <file>` or `DSH_GUARD_EXPORT_PATTERNS`; `--no-private-patterns` skips it. A failed scan removes the copy and exits with 1. `--with-dist` adds the built `dist/` and `--with-deps` the runtime dependencies from `node_modules/` to the copy and the scan; a vendored file may contain only those email addresses that its own `package.json` names. `scripts/pack.ts` runs the export with both, so the zip contains exactly the scanned tree, and refuses to pack when the installed `yaml` differs from the version in `package-lock.json`.
 

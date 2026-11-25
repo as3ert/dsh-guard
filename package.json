@@ -1,6 +1,6 @@
 {
   "name": "dsh-guard",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Declarative guard rules for DeepSeek Harness tool calls: block, ask, warn and redact. Ships no rules; users describe their own.",
   "private": true,
   "type": "module",
