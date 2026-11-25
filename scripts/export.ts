@@ -44,6 +44,11 @@ const SKIP_DIRS = new Set(['.git', '.tools', 'node_modules', 'dist', 'coverage']
 /** Files never exported: logs, decision logs, packed tarballs and zips. */
 const SKIP_FILE = /\.(log|jsonl|tgz|zip)$/i
 /**
+ * Internal planning documents of this private checkout: they describe the
+ * maintainer's own setup and are never part of the publishable tree.
+ */
+const INTERNAL_FILES = new Set(['docs/claude-code-port.md'])
+/**
  * YAML files allowed in the publishable tree: the synthetic fixture rules, the
  * integration rules, the dsh bundle layer, the example profile overlay and the
  * worked example rule shown in TESTING.md;
@@ -159,7 +164,7 @@ function publishableFiles(withDist: boolean, vendored: readonly Vendored[]): str
   // Vendored packages are copied whole, their own dist/ folders included.
   for (const { dir } of vendored) source.push(...walk(join(REPO, dir), REPO, false).map(path => path.replace(/\\/g, '/')))
   return source
-    .filter(path => !SKIP_FILE.test(path))
+    .filter(path => !SKIP_FILE.test(path) && !INTERNAL_FILES.has(path))
     .filter(path => existsSync(join(REPO, path)) && statSync(join(REPO, path)).isFile())
     .sort()
 }

@@ -18,7 +18,7 @@ $dsh = "$env:LOCALAPPDATA\Programs\DeepSeek Harness\resources\runtime\cli\bin\ds
 & $dsh --version
 ```
 
-macOS, in a terminal (the launcher path is inferred from the Windows layout and not yet verified; if it does not exist, please report the path you found inside the app bundle):
+macOS, in a terminal (the path inside the app bundle comes from the app's own command installer, but the location `/Applications` is not yet verified; if the launcher does not exist there, please report the path you found inside the app bundle):
 
 ```sh
 dsh="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"

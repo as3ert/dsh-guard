@@ -40,7 +40,7 @@ The desktop app contains a command-line launcher with its own Node.js and pnpm:
 | OS | launcher |
 |---|---|
 | Windows | `%LOCALAPPDATA%\Programs\DeepSeek Harness\resources\runtime\cli\bin\dsh.cmd` |
-| macOS | `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh` (inferred from the Windows layout, not verified) |
+| macOS | `/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh` (the app's own command installer uses `Resources/runtime/cli/bin/dsh`; the app location `/Applications` is assumed and not verified on macOS) |
 
 Windows, in PowerShell:
 
