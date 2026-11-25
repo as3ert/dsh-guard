@@ -70,7 +70,7 @@ if [ "$PM" = npm ]; then
   npm ci $Q
   npm run build $Q
 else
-  "$NODE" "$PNPM_CJS" install --silent
+  "$NODE" "$PNPM_CJS" install --silent --ignore-scripts --config.node-linker=hoisted
   "$NODE" "$PNPM_CJS" run build $Q
 fi
 

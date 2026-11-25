@@ -76,7 +76,7 @@ Push-Location $Root
 try {
   Say "Using node $(& $node -p 'process.versions.node') with $pm"
   $q = if ($BuildOnly) { @('--silent') } else { @() }
-  if ($pm -eq 'npm') { RunPm (@('ci') + $q) } else { RunPm (@('install', '--silent')) }
+  if ($pm -eq 'npm') { RunPm (@('ci') + $q) } else { RunPm (@('install', '--silent', '--ignore-scripts', '--config.node-linker=hoisted')) }
   RunPm (@('run', 'build') + $q)
 } finally { Pop-Location }
 
