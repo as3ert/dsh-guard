@@ -70,15 +70,15 @@ For a shipped profile name, `plugin add` first initializes the profile from its 
 
 ### Building from source
 
-Building needs Node.js 24.9 or later with npm; dsh itself loads only the built `dist/`.
+Building needs Node.js 24.9 or later with npm; dsh itself loads only the built `dist/`. From a Git checkout, `scripts/setup.ps1` (Windows) or `scripts/setup.sh` (macOS, Linux) does everything below in one command, falls back to the node and pnpm bundled with the desktop app, and installs git hooks that rebuild after `git pull`; see "Install from a Git checkout" in TESTING.md. By hand:
 
 ```sh
 npm ci
 npm run build
-dsh plugin --profile headless add /path/to/dsh-guard
+dsh plugin --profile desktop add /path/to/dsh-guard
 ```
 
-A checkout provides `yaml` from its own `node_modules`. `npm run pack:zip -- --out <dir>` builds the release zip (see Development).
+`desktop` is the profile of the desktop app; use another name for a test profile. A checkout provides `yaml` from its own `node_modules`. `npm run pack:zip -- --out <dir>` builds the release zip (see Development).
 
 ### Verify that it is loaded
 

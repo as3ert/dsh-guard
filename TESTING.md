@@ -28,6 +28,38 @@ dsh="/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh"
 
 `plugin add` prints a warning that the linked package's peer dependencies will not resolve from the target `node_modules`; this is expected. Then quit the app completely and start it again.
 
+## Install from a Git checkout
+
+An alternative to the zip, for anyone who prefers to follow the repository. Clone it to a folder that stays where it is, then run one command from the checkout. On Windows, in PowerShell:
+
+```powershell
+git clone https://github.com/as3ert/dsh-guard.git C:\Tools\dsh-guard
+cd C:\Tools\dsh-guard
+.\scripts\setup.ps1
+```
+
+On macOS or Linux (unverified there):
+
+```sh
+git clone https://github.com/as3ert/dsh-guard.git ~/Tools/dsh-guard
+cd ~/Tools/dsh-guard
+sh scripts/setup.sh
+```
+
+The script finds the desktop app's `dsh` launcher (else `dsh` on the PATH), builds the plugin, adds the checkout to the `desktop` profile and installs two local git hooks. It uses the system Node.js 24.9 or later with npm when present, and otherwise the node and pnpm that the app bundles, so nothing needs to be installed first. Then quit the app completely and start it again.
+
+Options: `-Profile <name>` (`--profile <name>`) installs into another profile, `-Dsh <path>` (`--dsh <path>`) names the launcher explicitly, and `-NoHook` (`--no-hook`) skips the hooks. Running the script again is safe: a profile that already loads dsh-guard is left as it is.
+
+Updating is `git pull` followed by restarting the app. The `post-merge` hook (and `post-checkout`, for branch switches) rebuilds the plugin and prints `dsh-guard rebuilt; restart the DeepSeek Harness app`. An existing hook of your own is kept: the rebuild is appended to it, or skipped with a message when it is not a shell script. If the hooks are not wanted, `git pull` followed by `.\scripts\setup.ps1` (`sh scripts/setup.sh`) does the same by hand.
+
+To uninstall, or to roll back to the zip install, remove the plugin from the profile, then restart the app:
+
+```powershell
+& $dsh plugin --profile desktop remove dsh-guard
+```
+
+and delete the two blocks marked `dsh-guard rebuild` from `.git/hooks/post-merge` and `.git/hooks/post-checkout` (or the files, when they contain nothing else).
+
 ## Five things to try
 
 1. **No rules, nothing changes.** Work as usual for a few minutes. dsh-guard ships no rules, so every tool call should pass, except an attempt by the agent to edit the guard's own rule files or the dsh configuration.
