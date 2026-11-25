@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /** dsh-guard command line: test, explain, lint. @module */
 import { resolve } from 'node:path'
-import { isObserve } from './authoring.ts'
-import { builtinRules } from './builtin.ts'
-import { defaultOptions, protectedPaths } from './core.ts'
-import { evaluate, redact, ruleFires } from './engine.ts'
-import { exampleCall, runExamples } from './examples.ts'
-import { defaultUserDir, loadRules } from './loader.ts'
-import { defaultLogPath } from './log.ts'
-import { looksCatastrophic, tokenPrefixRemark, unboundedTokenPrefixes } from './regex.ts'
-import { readLogStats } from './stats.ts'
-import { viewOf } from './tools.ts'
-import type { LoadOptions } from './loader.ts'
-import type { Issue, Phase, RuleSet, ToolCall } from './types.ts'
+import { isObserve } from './core/authoring.ts'
+import { builtinFor, defaultOptions } from './core/core.ts'
+import { evaluate, redact, ruleFires } from './core/engine.ts'
+import { exampleCall, runExamples } from './core/examples.ts'
+import { defaultUserDir, loadRules } from './core/loader.ts'
+import { defaultLogPath } from './core/log.ts'
+import { looksCatastrophic, tokenPrefixRemark, unboundedTokenPrefixes } from './core/regex.ts'
+import { readLogStats } from './core/stats.ts'
+import { viewOf } from './core/tools.ts'
+import type { LoadOptions } from './core/loader.ts'
+import type { Issue, Phase, RuleSet, ToolCall } from './core/types.ts'
+import { dshAdapter } from './dsh/protect.ts'
 
 const USAGE = `Usage: dsh-guard <command> [options]
 
@@ -77,7 +77,7 @@ function parseArgs(argv: string[]): Args {
 
 function loadOptions(args: Args): LoadOptions {
   const options = { ...defaultOptions(), cwd: args.cwd, userDir: args.userDir ?? '', packs: args.packs, extraRuleFiles: args.extra, logPath: args.log }
-  return { cwd: args.cwd, packs: args.packs, userDir: args.userDir, extraFiles: args.extra, builtin: builtinRules(protectedPaths(options)) }
+  return { cwd: args.cwd, packs: args.packs, userDir: args.userDir, extraFiles: args.extra, builtin: builtinFor(options, dshAdapter()) }
 }
 
 function printIssues(issues: readonly Issue[]): void {

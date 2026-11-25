@@ -1,19 +1,29 @@
 /**
  * Built-in rules that no layer can override or disable. The self-protection
  * rule keeps generic file and shell tools away from the guard's own rule
- * files and configuration; only `guard_apply` (after an approval) writes them.
+ * files and configuration; only the harness's approved authoring path writes
+ * them. The generic targets (rule directories, rule files, the decision log,
+ * the guard's code) are known here; each harness adapter adds its own
+ * (configuration files, plugin trees, extra checks) through
+ * {@link ProtectedPaths}.
  * @module
  */
 import { homedir } from 'node:os'
 import { isAbsolute, join, resolve } from 'node:path'
 import { normalizePath } from './tools.ts'
-import type { CallView, Rule } from './types.ts'
+import type { CallView, Rule, RuleExamples } from './types.ts'
 
 /** Id prefix reserved for built-in rules; rule files may not use it. */
 export const RESERVED_PREFIX = 'dsh-guard.'
 
 /** Id of the self-protection rule. */
 export const SELF_PROTECT_ID = 'dsh-guard.self-protect'
+
+/** Project rule directory names, relative to the session directory. */
+export const PROJECT_DIRS = ['.dsh-guard', '.dsh-guard.local'] as const
+
+/** Outcome of an adapter check: a hit with an optional message, or undefined. */
+export type ExtraCheck = (view: CallView) => { hit: true, message?: string } | undefined
 
 /** Paths the self-protection rule needs to know. */
 export interface ProtectedPaths {
@@ -23,61 +33,74 @@ export interface ProtectedPaths {
   logPath: string
   /** Rule files from `extraRuleFiles`. */
   ruleFiles: readonly string[]
-  /** Protected trees: the running plugin code and every configured pack file or directory. */
+  /** Protected trees: the running guard code and every configured pack file or directory. */
   codeDirs: readonly string[]
-  /** DSH home; its profile patches hold the plugin configuration. */
-  dshHome: string
+  /** Further protected directories (adapter state, plugin trees). */
+  extraDirs?: readonly string[]
+  /** Further protected single files (harness settings). */
+  extraFiles?: readonly string[]
+  /** Patterns over the comparable absolute path (forward slashes; lower case on Windows and macOS). */
+  extraPatterns?: readonly RegExp[]
+  /** Patterns over a shell command that mark it as touching a protected location by name. */
+  shellNames?: readonly RegExp[]
+  /** Harness-specific checks run on every call, before the path checks. */
+  extraChecks?: readonly ExtraCheck[]
 }
 
-/** Default DSH home, following `@deepseek-ai/dsh-home-paths`: `$DSH_HOME`, else `~/.dsh`. */
-export function defaultDshHome(): string {
-  const env = process.env.DSH_HOME
-  return env !== undefined && env.trim() !== '' ? resolve(env) : join(homedir(), '.dsh')
+/** Text and examples of the self-protection rule, supplied by the adapter. */
+export interface SelfProtectText {
+  doc: string
+  message: string
+  examples: RuleExamples
 }
 
 const caseless = process.platform === 'win32' || process.platform === 'darwin'
 
 /** Comparable form of an absolute path. */
-function comparable(path: string): string {
+export function comparablePath(path: string): string {
   const slashed = normalizePath(resolve(path)).replace(/\/+$/, '')
   return caseless ? slashed.toLowerCase() : slashed
 }
+
+/** Regex source matching a comparable path literally. */
+export function escapedPath(path: string): string {
+  return comparablePath(path).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Flags for a regex over comparable paths. */
+export const PATH_FLAGS = caseless ? 'i' : ''
 
 /** Whether `path` is `root` or lies below it. */
 function within(path: string, root: string): boolean {
   return path === root || path.startsWith(`${root}/`)
 }
 
+interface Targets { dirs: string[], files: string[], patterns: readonly RegExp[] }
+
 /** Protected directories and single files for one session directory. */
-function protectedTargets(paths: ProtectedPaths, cwd: string | undefined): { dirs: string[], files: string[], patterns: RegExp[] } {
-  const dirs: string[] = [...paths.codeDirs]
+function protectedTargets(paths: ProtectedPaths, cwd: string | undefined): Targets {
+  const dirs: string[] = [...paths.codeDirs, ...paths.extraDirs ?? []]
   if (paths.userDir !== null) dirs.push(paths.userDir)
-  if (cwd !== undefined) dirs.push(join(cwd, '.dsh-guard'), join(cwd, '.dsh-guard.local'))
-  const files = [...paths.ruleFiles]
+  if (cwd !== undefined) for (const name of PROJECT_DIRS) dirs.push(join(cwd, name))
+  const files = [...paths.ruleFiles, ...paths.extraFiles ?? []]
   if (paths.logPath !== '') files.push(paths.logPath)
-  // Profile and home patches carry the plugin row and its config; package.json lists the profile's bundles.
-  const home = comparable(paths.dshHome)
-  const escaped = home.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const patterns = [
-    new RegExp(`^${escaped}/(profiles/[^/]+/)?(cordis(\\.patch)?\\.ya?ml|package\\.json|pnpm-workspace\\.yaml)$`, caseless ? 'i' : ''),
-  ]
-  return { dirs: dirs.map(comparable), files: files.map(comparable), patterns }
+  return { dirs: dirs.map(comparablePath), files: files.map(comparablePath), patterns: paths.extraPatterns ?? [] }
 }
 
 /** Whether an absolute or session-relative path is protected. */
-function isProtected(raw: string, cwd: string | undefined, targets: ReturnType<typeof protectedTargets>): boolean {
+function isProtected(raw: string, cwd: string | undefined, targets: Targets): boolean {
   const trimmed = raw.trim()
   if (trimmed === '') return false
   const expanded = trimmed.startsWith('~/') || trimmed === '~' ? join(homedir(), trimmed.slice(1)) : trimmed
   const absolute = isAbsolute(expanded) ? expanded : resolve(cwd ?? process.cwd(), expanded)
-  const path = comparable(absolute)
+  const path = comparablePath(absolute)
   return targets.dirs.some(dir => within(path, dir))
     || targets.files.includes(path)
     || targets.patterns.some(pattern => pattern.test(path))
 }
 
 /** Shell verbs and operators that create, change, move or delete files. */
-const SHELL_WRITE = new RegExp([
+export const SHELL_WRITE = new RegExp([
   String.raw`(^|[^0-9&<>=-])>{1,2}\s*[^\s&|]`,
   String.raw`\b(rm|rmdir|mv|cp|tee|touch|truncate|dd|ln|install|chmod|chown|unlink|mkdir|rsync|scp)\b`,
   String.raw`\b(sed|perl|ruby)\b[^|;&\n]*\s-i`,
@@ -87,15 +110,17 @@ const SHELL_WRITE = new RegExp([
   String.raw`\b(WriteAllText|WriteAllBytes|AppendAllText|writeFile\w*|appendFile\w*|open\s*\([^)]*['"][wa+])`,
 ].join('|'), 'i')
 
+const PROJECT_DIR_NAME = /\.dsh-guard(\.local)?\b/i
+
 /** Path-like tokens of a shell command, quotes stripped. */
 function shellTokens(command: string): string[] {
   return command.split(/[\s;|&<>(){}=,]+/).map(token => token.replace(/^['"`]+|['"`]+$/g, '')).filter(token => token !== '')
 }
 
 /** Whether a shell command names a protected path and looks like a write. */
-function shellWritesProtected(command: string, cwd: string | undefined, targets: ReturnType<typeof protectedTargets>): boolean {
+function shellWritesProtected(command: string, cwd: string | undefined, targets: Targets, names: readonly RegExp[]): boolean {
   if (!SHELL_WRITE.test(command)) return false
-  if (/\.dsh-guard(\.local)?\b/i.test(command)) return true
+  if (PROJECT_DIR_NAME.test(command) || names.some(name => name.test(command))) return true
   const normalized = caseless ? normalizePath(command).toLowerCase() : normalizePath(command)
   if (targets.dirs.some(dir => normalized.includes(dir)) || targets.files.some(file => normalized.includes(file))) return true
   return shellTokens(command).some(token => /[\\/.]/.test(token) && isProtected(token, cwd, targets))
@@ -114,6 +139,10 @@ function writtenPaths(view: CallView): string[] {
  */
 export function selfProtectCheck(paths: ProtectedPaths): (view: CallView) => boolean | { hit: boolean, message?: string } {
   return view => {
+    for (const check of paths.extraChecks ?? []) {
+      const outcome = check(view)
+      if (outcome !== undefined) return outcome
+    }
     const cwd = view.cwd ?? view.fields.cwd
     const targets = protectedTargets(paths, cwd)
     switch (view.canonical) {
@@ -121,51 +150,47 @@ export function selfProtectCheck(paths: ProtectedPaths): (view: CallView) => boo
       case 'edit':
         return writtenPaths(view).some(path => isProtected(path, cwd, targets))
       case 'shell':
-        return shellWritesProtected(view.fields.command ?? '', cwd, targets)
+        return shellWritesProtected(view.fields.command ?? '', cwd, targets, paths.shellNames ?? [])
       default:
-        if (view.tool === 'plugin_manager') {
-          const action = view.fields.action ?? ''
-          return /^(set_plugin|set_bundle|remove_bundle)$/.test(action) && /dsh-guard/i.test(view.fields.target ?? '')
-            ? { hit: true, message: 'The dsh-guard plugin cannot be disabled or removed by the agent; ask the user to do it.' }
-            : false
-        }
         return false
     }
   }
+}
+
+/** Generic wording, used when an adapter supplies none. */
+export const GENERIC_SELF_PROTECT: SelfProtectText = {
+  doc: 'Generic file and shell tools may not change guard rules, the decision log or the guard configuration; the approved authoring path does this.',
+  message: 'Guard rule files and the dsh-guard configuration can only be changed through the guard\'s authoring path, which asks the user.',
+  examples: {
+    block: [
+      { tool: 'write', input: { file_path: '.dsh-guard/rules.yaml', content: 'rules: []' }, cwd: '/work/project' },
+      { tool: 'shell', input: { command: 'rm -rf .dsh-guard' }, cwd: '/work/project' },
+    ],
+    pass: [
+      { tool: 'read', input: { file_path: '.dsh-guard/rules.yaml' }, cwd: '/work/project' },
+      { tool: 'write', input: { file_path: 'src/guard.ts', content: '' }, cwd: '/work/project' },
+    ],
+  },
 }
 
 /**
  * The built-in rules, compiled. They load after every layer and ignore
  * overrides and `disabled` entries.
  * @param paths - protected locations.
+ * @param text - the adapter's wording and examples of the self-protection rule.
  */
-export function builtinRules(paths: ProtectedPaths): Rule[] {
+export function builtinRules(paths: ProtectedPaths, text: SelfProtectText = GENERIC_SELF_PROTECT): Rule[] {
   const source = { layer: 'builtin' as const, file: '<built-in>' }
   return [{
     id: SELF_PROTECT_ID,
-    doc: 'Generic file and shell tools may not change guard rules, the decision log or the plugin configuration; guard_apply does this after an approval.',
+    doc: text.doc,
     when: 'pre_tool',
     tool: ['any'],
     match: {},
     action: 'block',
-    message: 'Guard rule files and the dsh-guard configuration can only be changed through guard_apply, which asks the user. Use guard_draft, guard_test, guard_replay and guard_apply.',
+    message: text.message,
     override: false,
-    examples: {
-      block: [
-        { tool: 'write', input: { file_path: '.dsh-guard/rules.yaml', content: 'rules: []' }, cwd: '/work/project' },
-        { tool: 'edit', input: { file_path: '/work/project/.dsh-guard.local/mine.yaml', old_string: 'block', new_string: 'warn' }, cwd: '/work/project' },
-        { tool: 'bash', input: { command: 'rm -rf .dsh-guard' }, cwd: '/work/project' },
-        { tool: 'pwsh', input: { command: "Set-Content -Path .dsh-guard.local\\x.yaml -Value ''" }, cwd: '/work/project' },
-        { tool: 'bash', input: { command: "echo '- id: x' >> ~/.dsh-guard/rules.yaml" }, cwd: '/work/project' },
-        { tool: 'plugin_manager', input: { action: 'set_plugin', target: 'dsh-guard', enabled: false } },
-      ],
-      pass: [
-        { tool: 'read', input: { file_path: '.dsh-guard/rules.yaml' }, cwd: '/work/project' },
-        { tool: 'bash', input: { command: 'cat .dsh-guard/rules.yaml' }, cwd: '/work/project' },
-        { tool: 'write', input: { file_path: 'src/guard.ts', content: '' }, cwd: '/work/project' },
-        { tool: 'plugin_manager', input: { action: 'list_plugins' } },
-      ],
-    },
+    examples: text.examples,
     sources: [source],
     matchers: [],
     checkFn: selfProtectCheck(paths),

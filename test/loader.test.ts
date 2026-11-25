@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import { basename, join } from 'node:path'
 import { describe, it } from 'node:test'
-import { layerFiles, loadRules } from '../src/loader.ts'
-import type { LoadOptions } from '../src/loader.ts'
+import { layerFiles, loadRules } from '../src/core/loader.ts'
+import type { LoadOptions } from '../src/core/loader.ts'
 import { tempDir, writeTree } from './helpers.ts'
 
 /** Synthetic rule files kept as test fixtures; the plugin itself ships none. */

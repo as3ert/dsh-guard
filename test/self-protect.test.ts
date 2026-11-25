@@ -2,15 +2,15 @@
 import assert from 'node:assert/strict'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { GuardCore } from '../src/core.ts'
-import type { ToolCall } from '../src/types.ts'
+import { dshCore } from '../src/dsh/index.ts'
+import type { ToolCall } from '../src/core/types.ts'
 import { tempDir, writeTree } from './helpers.ts'
 
 function setup(files: Record<string, string> = {}) {
   const root = tempDir()
   writeTree(root, { 'project/.keep': '', ...files })
   const cwd = join(root, 'project')
-  const core = new GuardCore({
+  const core = dshCore({
     packs: [join(root, 'packs')], userDir: join(root, 'user'), logPath: join(root, 'user', 'log.jsonl'), cwd, dshHome: join(root, 'dsh-home'), reloadIntervalMs: 0,
   })
   return { root, cwd, core }

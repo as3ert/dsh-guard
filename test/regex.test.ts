@@ -1,7 +1,7 @@
 /** Regex helpers: top-level alternatives and unbounded token prefixes in redact patterns. */
 import assert from 'node:assert/strict'
 import { describe, it } from 'node:test'
-import { compilePattern, topAlternatives, unboundedTokenPrefixes } from '../src/regex.ts'
+import { compilePattern, topAlternatives, unboundedTokenPrefixes } from '../src/core/regex.ts'
 
 describe('token prefixes', () => {
   it('splits only at top-level bars', () => {

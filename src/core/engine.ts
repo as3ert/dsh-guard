@@ -12,6 +12,8 @@ export interface EvalOptions {
   maxFieldChars?: number
   /** Clock, replaceable in tests. */
   now?: () => number
+  /** Let the override comment pass `ask` rules as well, as if they set `override: true`. */
+  askOverridable?: boolean
 }
 
 const OVERRIDE_RE = /#\s*guard:\s*allow\b[ \t]*([^\r\n]*)/i
@@ -112,7 +114,8 @@ export function evaluate(rules: readonly Rule[], call: ToolCall | CallView, phas
     const fired = ruleFires(rule, view, options.maxFieldChars)
     truncated ||= fired.truncated
     if (fired.message === undefined) continue
-    if (rule.override && reason !== undefined && rule.action !== 'redact') {
+    const overridable = rule.override || (options.askOverridable === true && rule.action === 'ask')
+    if (overridable && reason !== undefined && rule.action !== 'redact') {
       overridden.push({ rule, message: fired.message, overrideReason: reason })
       continue
     }
@@ -154,4 +157,19 @@ export function denialText(hits: readonly Hit[], action: Action): string {
     ? '\nOnly if the user explicitly asked for this exception, append `# guard: allow <reason>` to the shell command.'
     : ''
   return `${head}: ${lines.join('; ')}${tail}`
+}
+
+/**
+ * Model-facing text for ask hits in a harness whose own approval prompt is not
+ * used: the call is refused, and the agent is told to get the user's agreement
+ * in the chat and then repeat a shell command with the override comment.
+ * @param hits - hits of the verdict.
+ * @param shell - whether the call is a shell command (only those take the comment).
+ */
+export function askBlockText(hits: readonly Hit[], shell: boolean): string {
+  const lines = hits.filter(hit => hit.rule.action === 'ask').map(hit => `[${hit.rule.id}] ${hit.message}`)
+  const tail = shell
+    ? 'Ask the user in the chat whether to run this command. Only after the user agrees, run the same command again with `# guard: allow <the user\'s reason>` appended.'
+    : 'This is not a shell command, so it cannot be repeated with an override comment; ask the user in the chat how to proceed.'
+  return `dsh-guard needs the user's agreement: ${lines.join('; ')}\n${tail}`
 }

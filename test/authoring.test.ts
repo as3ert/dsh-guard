@@ -3,12 +3,12 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it } from 'node:test'
-import { GuardAuthoring, approvalPrompt, promotionRequest, proposeText } from '../src/authoring.ts'
-import type { AskAnswer, DraftRequest } from '../src/authoring.ts'
-import { GuardCore } from '../src/core.ts'
-import { sessionHistory } from '../src/history.ts'
-import type { HistoricCall } from '../src/history.ts'
-import { readLogStats } from '../src/stats.ts'
+import { GuardAuthoring, approvalPrompt, promotionRequest, proposeText } from '../src/core/authoring.ts'
+import type { AskAnswer, DraftRequest } from '../src/core/authoring.ts'
+import type { HistoricCall } from '../src/core/history.ts'
+import { sessionHistory } from '../src/dsh/history.ts'
+import { dshCore } from '../src/dsh/index.ts'
+import { readLogStats } from '../src/core/stats.ts'
 import { tempDir, writeTree } from './helpers.ts'
 
 const PACK = `
@@ -36,7 +36,7 @@ function setup(files: Record<string, string> = {}) {
   writeTree(root, { 'pack.yaml': PACK, 'project/.keep': '', ...files })
   const cwd = join(root, 'project')
   const logPath = join(root, 'log.jsonl')
-  const core = new GuardCore({ packs: [join(root, 'pack.yaml')], userDir: join(root, 'user'), logPath, cwd, dshHome: join(root, 'dsh-home'), reloadIntervalMs: 0 })
+  const core = dshCore({ packs: [join(root, 'pack.yaml')], userDir: join(root, 'user'), logPath, cwd, dshHome: join(root, 'dsh-home'), reloadIntervalMs: 0 })
   return { root, cwd, core, logPath, authoring: new GuardAuthoring(core) }
 }
 

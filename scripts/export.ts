@@ -35,7 +35,7 @@ import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync,
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parse } from 'yaml'
-import { compilePattern } from '../src/regex.ts'
+import { compilePattern } from '../src/core/regex.ts'
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 

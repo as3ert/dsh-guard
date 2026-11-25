@@ -10,16 +10,17 @@ import { fileURLToPath } from 'node:url'
 import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { ToolExecution } from '@deepseek-ai/dsh-tools'
-import { GuardAuthoring, REPLAY_LIMIT, draftText, isObserve, onlyBuiltin, proposeText, replayText, testText } from './authoring.ts'
-import type { ApprovalAnswer, AskAnswer, AuthoringLayer, DraftRequest, Mode, Operation } from './authoring.ts'
-import type { GuardCore } from './core.ts'
+import { GuardAuthoring, REPLAY_LIMIT, draftText, proposeText, replayText, testText } from '../core/authoring.ts'
+import type { ApprovalAnswer, AskAnswer, AuthoringLayer, DraftRequest, Mode, Operation } from '../core/authoring.ts'
+import type { GuardCore } from '../core/core.ts'
+import type { HistorySource } from '../core/history.ts'
+import { listText as coreListText } from '../core/text.ts'
+import type { Rule } from '../core/types.ts'
 import { sessionHistory } from './history.ts'
-import type { HistorySource, SessionQueryLike } from './history.ts'
-import { readLogStats } from './stats.ts'
-import type { Rule } from './types.ts'
+import type { SessionQueryLike } from './history.ts'
 
 /** Shipped guidance for the agent, also registered as a system-prompt section. */
-export const GUIDANCE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', 'guidance', 'authoring.md')
+export const GUIDANCE_FILE = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'guidance', 'authoring.md')
 
 /** Read the shipped guidance text. */
 export function guidanceText(): string {
@@ -92,25 +93,7 @@ export const NO_RULES_TEXT = 'No guard rules exist yet: dsh-guard ships no rules
 
 /** One line per rule for guard_list. */
 export function listText(rules: readonly Rule[], logPath: string, filter: { layer?: string, observeOnly?: boolean } = {}): string {
-  const table = rulesTable(rules, logPath, filter)
-  return onlyBuiltin(rules) && filter.layer !== 'builtin' ? `${NO_RULES_TEXT}
-${table}` : table
-}
-
-function rulesTable(rules: readonly Rule[], logPath: string, filter: { layer?: string, observeOnly?: boolean }): string {
-  const stats = readLogStats(logPath)
-  const lines: string[] = []
-  for (const rule of rules) {
-    const layers = rule.sources.map(source => source.layer)
-    if (filter.layer !== undefined && !layers.includes(filter.layer as never)) continue
-    if (filter.observeOnly === true && !isObserve(rule)) continue
-    const stat = stats.get(rule.id)
-    const action = rule.disabled === true ? `disabled (${rule.reason})` : isObserve(rule) ? `warn [observe, promote_to ${rule.promote_to}]` : rule.action
-    const counts = stat === undefined ? 'hits 0' : `hits ${stat.hits}, overrides ${stat.overrides}`
-    const file = rule.sources[rule.sources.length - 1].file
-    lines.push(`${rule.id} | ${layers.join('>')} | ${rule.when} ${rule.tool.join(',')} | ${action} | ${counts} | ${file}`)
-  }
-  return lines.length === 0 ? 'No rules match.' : ['id | layers (definition>overrides) | phase tools | action | log counts | file', ...lines].join('\n')
+  return coreListText(rules, logPath, filter, NO_RULES_TEXT)
 }
 
 /**

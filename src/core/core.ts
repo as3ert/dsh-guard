@@ -1,10 +1,10 @@
-/** Host-independent guard logic used by the dsh plugin and the CLI. @module */
+/** Host-independent guard logic used by every harness adapter and the CLI. @module */
 import { statSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { builtinRules, defaultDshHome } from './builtin.ts'
-import type { ProtectedPaths } from './builtin.ts'
-import { denialText, evaluate, redact } from './engine.ts'
+import { builtinRules } from './builtin.ts'
+import type { ProtectedPaths, SelfProtectText } from './builtin.ts'
+import { askBlockText, denialText, evaluate, redact } from './engine.ts'
 import { defaultUserDir, layerFiles, loadRules } from './loader.ts'
 import { DecisionLog, defaultLogPath } from './log.ts'
 import { summarize, viewOf } from './tools.ts'
@@ -35,8 +35,24 @@ export interface GuardOptions {
   disableLayers: LayerName[]
   /** Layers allowed to name check hooks. */
   checkLayers: LayerName[]
-  /** DSH home whose profile patches hold the plugin configuration (protected). */
-  dshHome: string
+  /**
+   * Treat `ask` hits as blocks that the user lifts by agreeing in the chat, after which the
+   * agent repeats the shell command with the override comment (every ask rule counts as
+   * overridable). For harnesses whose own prompt must not be used.
+   */
+  askAsBlock: boolean
+}
+
+/** What a harness adapter adds to the generic guard. */
+export interface GuardAdapter {
+  /** Harness name, written to every log record. */
+  readonly harness: string
+  /** Harness-specific protected locations added to the generic ones. */
+  readonly protect?: (base: ProtectedPaths, options: GuardOptions) => ProtectedPaths
+  /** Wording and examples of the self-protection rule. */
+  readonly selfProtect?: SelfProtectText
+  /** Code directories of the adapter (protected), in addition to the core's. */
+  readonly codeDirs?: readonly string[]
 }
 
 /** Defaults of every option. */
@@ -53,25 +69,35 @@ export function defaultOptions(): GuardOptions {
     reloadIntervalMs: 2000,
     disableLayers: ['user', 'local'],
     checkLayers: ['packs', 'user', 'local', 'extra'],
-    dshHome: defaultDshHome(),
+    askAsBlock: false,
   }
 }
 
-/** Directory of the running plugin code (`dist/` in dsh, `src/` in tests). */
-const CODE_DIR = dirname(fileURLToPath(import.meta.url))
+/** Root of the running guard code: `dist/` when built, `src/` in tests. */
+const CODE_DIR = dirname(dirname(fileURLToPath(import.meta.url)))
 
 /**
- * Locations the self-protection rule guards for a set of options.
+ * Generic locations the self-protection rule guards for a set of options.
  * @param options - guard options.
+ * @param adapter - adds the harness's own locations.
  */
-export function protectedPaths(options: GuardOptions): ProtectedPaths {
-  return {
+export function protectedPaths(options: GuardOptions, adapter?: GuardAdapter): ProtectedPaths {
+  const base: ProtectedPaths = {
     userDir: options.userDir === '' ? null : options.userDir,
     logPath: options.logPath,
     ruleFiles: [...options.extraRuleFiles],
-    codeDirs: [CODE_DIR, ...options.packs.map(pack => resolve(pack))],
-    dshHome: options.dshHome,
+    codeDirs: [CODE_DIR, ...adapter?.codeDirs ?? [], ...options.packs.map(pack => resolve(pack))],
   }
+  return adapter?.protect?.(base, options) ?? base
+}
+
+/**
+ * The built-in rules for a set of options and an adapter.
+ * @param options - guard options.
+ * @param adapter - harness adapter.
+ */
+export function builtinFor(options: GuardOptions, adapter?: GuardAdapter) {
+  return builtinRules(protectedPaths(options, adapter), adapter?.selfProtect)
 }
 
 /** Pre-execute outcome. */
@@ -98,17 +124,17 @@ interface CacheEntry {
   checkedAt: number
 }
 
-/** Rule cache, evaluation and logging for one host. */
 /**
  * Notice text for a hit of a warn rule. An observe-mode rule (warn with promote_to) says that the call was allowed and what the rule would do once enforced; a plain warn keeps the rule message.
  */
-function warningText(hit: { rule: { id: string, promote_to?: string }, message: string }): string {
+export function warningText(hit: { rule: { id: string, promote_to?: string }, message: string }): string {
   const promote = hit.rule.promote_to
   if (promote === undefined) return `dsh-guard warning [${hit.rule.id}]: ${hit.message}`
   const verb = promote === 'block' ? 'block it' : promote === 'ask' ? 'ask for confirmation' : promote === 'redact' ? 'redact the matching output' : promote
   return `dsh-guard observe [${hit.rule.id}]: this call was allowed; once enforced the rule would ${verb}: ${hit.message}`
 }
 
+/** Rule cache, evaluation and logging for one host. */
 export class GuardCore {
   readonly options: GuardOptions
   readonly log: DecisionLog
@@ -119,16 +145,20 @@ export class GuardCore {
   readonly builtin: readonly Rule[]
   /** Receives load issues and internal errors (for example the host logger). */
   readonly report: (level: 'warn' | 'info', message: string) => void
+  /** The harness adapter, if any. */
+  readonly adapter?: GuardAdapter
 
   /**
    * @param options - partial options merged over the defaults.
    * @param report - receives load issues and internal errors (for example the host logger).
+   * @param adapter - harness additions (protected paths, wording, log field).
    */
-  constructor(options: Partial<GuardOptions> = {}, report: (level: 'warn' | 'info', message: string) => void = () => {}) {
+  constructor(options: Partial<GuardOptions> = {}, report: (level: 'warn' | 'info', message: string) => void = () => {}, adapter?: GuardAdapter) {
     this.report = report
     this.options = { ...defaultOptions(), ...options }
-    this.log = new DecisionLog(this.options.logPath)
-    this.builtin = builtinRules(protectedPaths(this.options))
+    if (adapter !== undefined) this.adapter = adapter
+    this.log = new DecisionLog(this.options.logPath, adapter?.harness)
+    this.builtin = builtinFor(this.options, adapter)
   }
 
   /**
@@ -204,12 +234,12 @@ export class GuardCore {
   }
 
   private evalOptions() {
-    return { timeBudgetMs: this.options.timeBudgetMs, maxFieldChars: this.options.maxFieldChars }
+    return { timeBudgetMs: this.options.timeBudgetMs, maxFieldChars: this.options.maxFieldChars, askOverridable: this.options.askAsBlock }
   }
 
-  private logHits(call: ToolCall, verdict: Verdict, verdictName: (hit: Hit) => string, callId?: string): void {
+  private logHits(call: ToolCall, verdict: Verdict, verdictName: (hit: Hit) => string, callId?: string, session?: string): void {
     const view = viewOf(call)
-    const base = { tool: call.tool, summary: summarize(view), cwd: call.cwd ?? this.options.cwd, ...callId !== undefined ? { callId } : {} }
+    const base = { tool: call.tool, summary: summarize(view), cwd: call.cwd ?? this.options.cwd, ...callId !== undefined ? { callId } : {}, ...session !== undefined ? { session } : {} }
     const onError = (error: unknown) => this.report('warn', `dsh-guard: log write failed: ${(error as Error).message}`)
     for (const hit of verdict.hits) this.log.write({ ...base, rule: hit.rule.id, verdict: verdictName(hit) }, onError)
     for (const hit of verdict.overridden) this.log.write({ ...base, rule: hit.rule.id, verdict: 'override', reason: hit.overrideReason ?? '' }, onError)
@@ -217,10 +247,12 @@ export class GuardCore {
   }
 
   /** Record one free-form decision line. */
-  note(call: ToolCall, rule: string, verdict: string, callId?: string): void {
+  note(call: ToolCall, rule: string, verdict: string, callId?: string, extra: { session?: string, reason?: string } = {}): void {
     this.log.write({
       rule, verdict, tool: call.tool, summary: summarize(viewOf(call)), cwd: call.cwd ?? this.options.cwd,
       ...callId !== undefined ? { callId } : {},
+      ...extra.session !== undefined ? { session: extra.session } : {},
+      ...extra.reason !== undefined ? { reason: extra.reason } : {},
     }, error => this.report('warn', `dsh-guard: log write failed: ${(error as Error).message}`))
   }
 
@@ -236,15 +268,18 @@ export class GuardCore {
    * @param call - the call with its session directory.
    * @param callId - for the log.
    */
-  async pre(call: ToolCall, callId?: string): Promise<PreOutcome> {
+  async pre(call: ToolCall, callId?: string, session?: string): Promise<PreOutcome> {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'pre_tool', this.evalOptions())
-    this.logHits(call, verdict, hit => hit.rule.action, callId)
+    this.logHits(call, verdict, hit => hit.rule.action, callId, session)
     const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
     const failure = this.budgetDenial(verdict)
     if (failure !== undefined) return { kind: 'deny', reason: failure, warnings, verdict }
     if (verdict.action === 'block') return { kind: 'deny', reason: denialText(verdict.hits, 'block'), warnings, verdict }
-    if (verdict.action === 'ask') return { kind: 'ask', reason: denialText(verdict.hits, 'ask'), warnings, verdict }
+    if (verdict.action === 'ask') {
+      if (this.options.askAsBlock) return { kind: 'deny', reason: askBlockText(verdict.hits, viewOf(call).canonical === 'shell'), warnings, verdict }
+      return { kind: 'ask', reason: denialText(verdict.hits, 'ask'), warnings, verdict }
+    }
     return { kind: 'allow', warnings, verdict }
   }
 
@@ -269,10 +304,10 @@ export class GuardCore {
    * @param call - the call with its `output` set to the result text.
    * @param callId - for the log.
    */
-  async post(call: ToolCall, callId?: string): Promise<PostOutcome> {
+  async post(call: ToolCall, callId?: string, session?: string): Promise<PostOutcome> {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'post_tool', this.evalOptions())
-    this.logHits(call, verdict, hit => hit.rule.action, callId)
+    this.logHits(call, verdict, hit => hit.rule.action, callId, session)
     const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
     const redactHits = verdict.hits.filter(hit => hit.rule.action === 'redact')
     const failure = this.budgetDenial(verdict, false)
