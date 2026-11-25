@@ -1,0 +1,58 @@
+# Synthetic fixture rules for the engine tests. They exercise the engine only
+# and are not meant to protect anything.
+rules:
+  - id: fixture.block-shell
+    doc: Hard block on a marker command.
+    tool: shell
+    match:
+      command: '\bfixture-forbidden\b'
+    action: block
+    message: Fixture block.
+    examples:
+      block:
+        - fixture-forbidden --now
+      pass:
+        - fixture-allowed --now
+
+  - id: fixture.ask-shell
+    doc: Confirmation on a marker command; a trailing override comment skips it.
+    tool: shell
+    match:
+      command: '\bfixture-confirm\b'
+    action: ask
+    override: true
+    message: Fixture ask.
+    examples:
+      block:
+        - fixture-confirm run
+      pass:
+        - fixture-other run
+        - 'fixture-confirm run # guard: allow fixture reason'
+
+  - id: fixture.warn-read
+    doc: Warning when reading a marker file.
+    tool: read
+    match:
+      path: 'fixture-notes\.txt$'
+    action: warn
+    message: Fixture warn.
+    examples:
+      block:
+        - fixture-notes.txt
+      pass:
+        - fixture-other.txt
+
+  - id: fixture.ask-path
+    doc: Confirmation for writes into a marker directory, except template files.
+    tool: [write, edit]
+    match:
+      path: '(?:^|/)fixture-area/'
+      not_path: '\.template$'
+    action: ask
+    message: Fixture path ask.
+    examples:
+      block:
+        - fixture-area/data.txt
+      pass:
+        - fixture-area/data.template
+        - elsewhere/data.txt

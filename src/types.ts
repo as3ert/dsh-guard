@@ -7,7 +7,7 @@ export type Phase = 'pre_tool' | 'post_tool'
 export type Action = 'block' | 'ask' | 'warn' | 'redact'
 
 /** Rule source layers, in load order. */
-export type LayerName = 'bundled' | 'user' | 'project' | 'local' | 'extra'
+export type LayerName = 'packs' | 'user' | 'project' | 'local' | 'extra' | 'builtin'
 
 /** One tool call as the engine sees it, independent of dsh types. */
 export interface ToolCall {
@@ -57,6 +57,11 @@ export interface RuleSpec {
   check?: string
   disabled?: boolean
   reason?: string
+  /**
+   * Observe mode: the action this `warn` rule is meant to take once it is
+   * promoted. Only meaningful while `action` is `warn`.
+   */
+  promote_to?: Action
 }
 
 /** Where a rule (or one of its overrides) came from. */

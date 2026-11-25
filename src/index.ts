@@ -11,6 +11,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import type { ContentBlock, ContextFormed } from '@deepseek-ai/dsh-llm'
 import type { UserMessage } from '@deepseek-ai/dsh-session'
 import type { PostToolDecision, PreToolDecision, ToolErrorInfo, ToolExecution } from '@deepseek-ai/dsh-tools'
+import { registerAuthoringTools } from './authoring-tools.ts'
 import { GuardCore, defaultOptions } from './core.ts'
 import type { GuardOptions } from './core.ts'
 import { redact } from './engine.ts'
@@ -38,10 +39,11 @@ export interface Config {
   reloadIntervalMs?: number
   disableLayers?: LayerName[]
   checkLayers?: LayerName[]
+  dshHome?: string
 }
 
 const defaults = defaultOptions()
-const LAYERS: LayerName[] = ['bundled', 'user', 'project', 'local', 'extra']
+const LAYERS: LayerName[] = ['packs', 'user', 'project', 'local', 'extra']
 
 export const Config: z<Config> = z.object({
   failMode: z.union(['open', 'closed']).default('open').description('On internal errors or an exhausted time budget: open lets the call pass, closed denies it.'),
@@ -49,12 +51,13 @@ export const Config: z<Config> = z.object({
   maxFieldChars: z.number().default(defaults.maxFieldChars).description('Longer fields are matched on their head and tail only.'),
   logPath: z.string().default(defaults.logPath).description('JSONL decision log; empty disables logging.'),
   userDir: z.string().default(defaults.userDir).description('User rule directory; empty skips the user layer.'),
-  packs: z.array(z.string()).default(defaults.packs).description('Bundled packs to load.'),
+  packs: z.array(z.string()).default(defaults.packs).description('Rule files or directories loaded before the user layer. The plugin ships no rules; none by default.'),
   extraRuleFiles: z.array(z.string()).default([]).description('Rule files loaded after the local layer.'),
   cwd: z.string().description('Fallback project directory; defaults to the process directory.'),
   reloadIntervalMs: z.number().default(defaults.reloadIntervalMs).description('Minimum interval between rule-file change checks; 0 disables hot reload.'),
   disableLayers: z.array(z.union(LAYERS)).default(defaults.disableLayers).description('Layers whose files may disable earlier rules.'),
   checkLayers: z.array(z.union(LAYERS)).default(defaults.checkLayers).description('Layers whose files may name check hooks (code).'),
+  dshHome: z.string().description('DSH home whose profile patches the self-protection rule guards; defaults to $DSH_HOME or ~/.dsh.'),
 })
 
 const BLOCKED: ToolErrorInfo = { name: 'GuardError', code: 'GUARD_BLOCKED' }
@@ -132,6 +135,8 @@ export function apply(ctx: Context, config: Config): void {
     ctx.logger.warn(`dsh-guard: ${where} failed (${failMode}): ${(error as Error)?.stack ?? String(error)}`)
     if (call !== undefined) core.note(call, '-', `internal-error-${failMode}`)
   }
+
+  registerAuthoringTools(ctx, core, cwdOf)
 
   // Warm the cache so the synchronous guard has rules before the first call.
   void core.ruleSetFor(core.options.cwd).catch(error => internalError('initial rule load', error))
@@ -218,6 +223,8 @@ export function apply(ctx: Context, config: Config): void {
 }
 
 export { GuardCore } from './core.ts'
+export { GuardAuthoring } from './authoring.ts'
+export { settingsSnapshot } from './settings.ts'
 export { evaluate, redact, overrideReason } from './engine.ts'
 export { loadRules } from './loader.ts'
 export type { Rule, RuleSet, ToolCall, Verdict } from './types.ts'

@@ -5,26 +5,7 @@ import { describe, it } from 'node:test'
 import { apply } from '../src/index.ts'
 import type { Config } from '../src/index.ts'
 import { tempDir, writeTree } from './helpers.ts'
-
-type Listener = (...args: any[]) => Promise<any>
-
-function stubContext() {
-  const listeners: Record<string, { fn: Listener, prepend: boolean }[]> = {}
-  const guards: ((exec: object) => unknown)[] = []
-  const warnings: string[] = []
-  const ctx = {
-    on(name: string, fn: Listener, options?: boolean | { prepend?: boolean }) {
-      const prepend = typeof options === 'boolean' ? options : options?.prepend === true;
-      (listeners[name] ??= []).push({ fn, prepend })
-      return () => true
-    },
-    tools: { guard(fn: (exec: object) => unknown) { guards.push(fn); return () => {} } },
-    logger: { warn(message: string) { warnings.push(message) }, info() {} },
-    effect() {},
-    get() { return undefined },
-  }
-  return { ctx, listeners, guards, warnings }
-}
+import { stubContext } from './stub-context.ts'
 
 const RULES = `
 - { id: b, tool: shell, match: { command: 'rm -rf' }, action: block, message: no deletes }

@@ -1,7 +1,7 @@
 /** Schema validation of rule entries. @module */
 import type { Action, Phase, RuleSpec } from './types.ts'
 
-const KEYS = new Set(['id', 'doc', 'when', 'tool', 'match', 'action', 'message', 'override', 'examples', 'check', 'disabled', 'reason'])
+const KEYS = new Set(['id', 'doc', 'when', 'tool', 'match', 'action', 'message', 'override', 'examples', 'check', 'disabled', 'reason', 'promote_to'])
 const PHASES: readonly Phase[] = ['pre_tool', 'post_tool']
 const ACTIONS: readonly Action[] = ['block', 'ask', 'warn', 'redact']
 const ID_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*$/
@@ -118,6 +118,10 @@ export function checkEntry(raw: unknown): EntryCheck {
     if (typeof raw.reason === 'string' && raw.reason.trim() !== '') spec.reason = raw.reason.trim()
     else errors.push('`reason` must be a non-empty string')
   }
+  if (raw.promote_to !== undefined) {
+    if (raw.promote_to === 'block' || raw.promote_to === 'ask' || raw.promote_to === 'redact') spec.promote_to = raw.promote_to
+    else errors.push('`promote_to` must be block, ask or redact')
+  }
   return errors.length > 0 ? { errors } : { spec, errors }
 }
 
@@ -140,6 +144,12 @@ export function completeSpec(spec: PartialSpec): { spec?: RuleSpec, errors: stri
     errors.push('`output` can only be matched in a post_tool rule')
   }
   if (spec.disabled === true && spec.reason === undefined) errors.push('`disabled: true` needs a `reason`')
+  // promote_to describes an observe-mode warn rule; it is void once the rule is promoted.
+  const promoteTo = action === 'warn' ? spec.promote_to : undefined
+  if (promoteTo !== undefined && !PHASE_ACTIONS[when].includes(promoteTo)) {
+    errors.push(`promote_to \`${promoteTo}\` is not valid for \`${when}\` (allowed: ${PHASE_ACTIONS[when].filter(item => item !== 'warn').join(', ')})`)
+  }
+  if (promoteTo === 'redact' && match.output === undefined) errors.push('promote_to redact needs `match.output`, the patterns to mask')
   if (errors.length > 0) return { errors }
   return {
     spec: {
@@ -155,6 +165,7 @@ export function completeSpec(spec: PartialSpec): { spec?: RuleSpec, errors: stri
       ...spec.check !== undefined ? { check: spec.check } : {},
       ...spec.disabled !== undefined ? { disabled: spec.disabled } : {},
       ...spec.reason !== undefined ? { reason: spec.reason } : {},
+      ...promoteTo !== undefined ? { promote_to: promoteTo } : {},
     },
     errors,
   }

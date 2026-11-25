@@ -1,0 +1,6 @@
+# dsh bundle layer: mounts dsh-guard with its defaults when a profile lists
+# this package (`dsh plugin --profile <name> add <path or package>`).
+# Override the row's config in the profile's own cordis.patch.yml.
+- insert:
+    - id: dsh-guard
+      name: dsh-guard

@@ -12,12 +12,56 @@ export const inject = ['llm']
 
 const SHELL = process.platform === 'win32' ? 'pwsh' : 'bash'
 
-const SCRIPT = [
+const GUARD_SCRIPT = [
   { name: SHELL, args: { description: 'Guard block marker', command: 'echo dsh-guard-it-block-marker' } },
   { name: 'read', args: { file_path: 'notes.txt' } },
   { name: 'read', args: { file_path: 'secret.txt' } },
   { name: SHELL, args: { description: 'Guard ask marker', command: 'echo dsh-guard-it-ask-marker' } },
 ]
+
+/** Rule the authoring script drafts, tests, replays and applies. */
+const OBSERVE_RULE = {
+  id: 'it.observe',
+  tool: 'shell',
+  match: { command: 'dsh-guard-it-observe-marker' },
+  action: 'block',
+  message: 'integration observe marker',
+  examples: { block: ['echo dsh-guard-it-observe-marker'], pass: ['echo something else'] },
+}
+const CHANGE = { op: 'add', layer: 'project', rule: OBSERVE_RULE }
+
+/** Second rule, applied in enforce mode, so the next marker call asks. */
+const ASK_RULE = {
+  id: 'it.ask',
+  tool: 'shell',
+  match: { command: 'dsh-guard-it-ask-marker' },
+  action: 'ask',
+  message: 'integration ask marker',
+  examples: { block: ['echo dsh-guard-it-ask-marker'], pass: ['echo something else'] },
+}
+
+const AUTHORING_SCRIPT = [
+  { name: SHELL, args: { description: 'Observe marker before the rule', command: 'echo dsh-guard-it-observe-marker first' } },
+  { name: 'guard_list', args: {} },
+  { name: 'guard_draft', args: CHANGE },
+  { name: 'guard_test', args: CHANGE },
+  { name: 'guard_replay', args: CHANGE },
+  { name: 'guard_apply', args: CHANGE },
+  { name: SHELL, args: { description: 'Observe marker after the rule', command: 'echo dsh-guard-it-observe-marker second' } },
+  { name: 'write', args: { file_path: '.dsh-guard/rules.yaml', content: 'rules: []' } },
+  { name: SHELL, args: { description: 'Delete guard rules', command: process.platform === 'win32' ? 'Remove-Item -Recurse -Force .dsh-guard' : 'rm -rf .dsh-guard' } },
+  { name: 'guard_apply', args: { op: 'add', layer: 'project', rule: ASK_RULE, mode: 'enforce' } },
+  { name: SHELL, args: { description: 'Guard ask marker', command: 'echo dsh-guard-it-ask-marker' } },
+]
+
+/** Used by the `dsh plugin add` check: the plugin is active and its tools are registered. */
+const PROBE_SCRIPT = [
+  { name: SHELL, args: { description: 'Delete guard rules', command: process.platform === 'win32' ? 'Remove-Item -Recurse -Force .dsh-guard' : 'rm -rf .dsh-guard' } },
+  { name: 'guard_list', args: { layer: 'builtin' } },
+]
+
+const SCRIPTS = { guard: GUARD_SCRIPT, authoring: AUTHORING_SCRIPT, probe: PROBE_SCRIPT }
+const SCRIPT = SCRIPTS[process.env.DSH_GUARD_IT_SCRIPT ?? 'guard'] ?? GUARD_SCRIPT
 
 function toolCallsSoFar(messages) {
   let count = 0

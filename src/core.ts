@@ -1,11 +1,15 @@
 /** Host-independent guard logic used by the dsh plugin and the CLI. @module */
 import { statSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { builtinRules, defaultDshHome } from './builtin.ts'
+import type { ProtectedPaths } from './builtin.ts'
 import { denialText, evaluate, redact } from './engine.ts'
-import { DEFAULT_PACKS, defaultUserDir, layerFiles, loadRules } from './loader.ts'
+import { defaultUserDir, layerFiles, loadRules } from './loader.ts'
 import { DecisionLog, defaultLogPath } from './log.ts'
 import { summarize, viewOf } from './tools.ts'
 import type { LoadOptions } from './loader.ts'
-import type { Hit, Issue, LayerName, RuleSet, ToolCall, Verdict } from './types.ts'
+import type { Hit, Issue, LayerName, Rule, RuleSet, ToolCall, Verdict } from './types.ts'
 
 /** Guard configuration (mirrors the plugin Config). */
 export interface GuardOptions {
@@ -19,7 +23,7 @@ export interface GuardOptions {
   logPath: string
   /** User rule directory; empty skips the user layer. */
   userDir: string
-  /** Bundled packs to load. */
+  /** Rule files or directories loaded before the user layer; none by default. */
   packs: string[]
   /** Extra rule files loaded after the local layer. */
   extraRuleFiles: string[]
@@ -31,6 +35,8 @@ export interface GuardOptions {
   disableLayers: LayerName[]
   /** Layers allowed to name check hooks. */
   checkLayers: LayerName[]
+  /** DSH home whose profile patches hold the plugin configuration (protected). */
+  dshHome: string
 }
 
 /** Defaults of every option. */
@@ -41,12 +47,30 @@ export function defaultOptions(): GuardOptions {
     maxFieldChars: 100_000,
     logPath: defaultLogPath(),
     userDir: defaultUserDir(),
-    packs: [...DEFAULT_PACKS],
+    packs: [],
     extraRuleFiles: [],
     cwd: process.cwd(),
     reloadIntervalMs: 2000,
     disableLayers: ['user', 'local'],
-    checkLayers: ['bundled', 'user', 'local', 'extra'],
+    checkLayers: ['packs', 'user', 'local', 'extra'],
+    dshHome: defaultDshHome(),
+  }
+}
+
+/** Directory of the running plugin code (`dist/` in dsh, `src/` in tests). */
+const CODE_DIR = dirname(fileURLToPath(import.meta.url))
+
+/**
+ * Locations the self-protection rule guards for a set of options.
+ * @param options - guard options.
+ */
+export function protectedPaths(options: GuardOptions): ProtectedPaths {
+  return {
+    userDir: options.userDir === '' ? null : options.userDir,
+    logPath: options.logPath,
+    ruleFiles: [...options.extraRuleFiles],
+    codeDirs: [CODE_DIR, ...options.packs.map(pack => resolve(pack))],
+    dshHome: options.dshHome,
   }
 }
 
@@ -81,6 +105,8 @@ export class GuardCore {
   private readonly cache = new Map<string, CacheEntry>()
   private readonly pending = new Map<string, Promise<RuleSet>>()
   private readonly reported = new Set<string>()
+  /** Built-in rules, compiled once. */
+  readonly builtin: readonly Rule[]
   /** Receives load issues and internal errors (for example the host logger). */
   readonly report: (level: 'warn' | 'info', message: string) => void
 
@@ -92,10 +118,16 @@ export class GuardCore {
     this.report = report
     this.options = { ...defaultOptions(), ...options }
     this.log = new DecisionLog(this.options.logPath)
+    this.builtin = builtinRules(protectedPaths(this.options))
   }
 
-  private loadOptions(cwd: string): LoadOptions {
+  /**
+   * Layer selection for a project directory.
+   * @param cwd - project directory.
+   */
+  loadOptions(cwd: string): LoadOptions {
     return {
+      builtin: this.builtin,
       cwd,
       packs: this.options.packs,
       userDir: this.options.userDir === '' ? null : this.options.userDir,
@@ -149,6 +181,11 @@ export class GuardCore {
       this.pending.set(cwd, pending)
     }
     return pending
+  }
+
+  /** Drop cached rules so the next call re-reads every file (after guard_apply writes one). */
+  invalidate(): void {
+    this.cache.clear()
   }
 
   /** Rules already loaded for a directory, or for the fallback directory. */

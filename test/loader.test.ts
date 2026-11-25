@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { describe, it } from 'node:test'
-import { loadRules } from '../src/loader.ts'
+import { layerFiles, loadRules } from '../src/loader.ts'
 import type { LoadOptions } from '../src/loader.ts'
 import { tempDir, writeTree } from './helpers.ts'
+
+/** Synthetic rule files kept as test fixtures; the plugin itself ships none. */
+const FIXTURE_RULES = join(import.meta.dirname, 'fixtures', 'rules')
 
 const BASE = `
 rules:
@@ -26,12 +29,30 @@ function setup(files: Record<string, string>): LoadOptions {
 }
 
 describe('loader', () => {
-  it('loads the bundled packs without issues', async () => {
-    const set = await loadRules({ cwd: tempDir(), userDir: null })
+  it('loads no rules by default: the plugin ships no packs', async () => {
+    const options = { cwd: tempDir(), userDir: null }
+    assert.deepEqual(layerFiles(options), [])
+    const set = await loadRules(options)
+    assert.equal(set.rules.length, 0)
     assert.equal(set.issues.length, 0, JSON.stringify(set.issues))
-    assert.ok(set.rules.some(rule => rule.id === 'safety.rm-rf-root'))
-    assert.ok(set.rules.some(rule => rule.id === 'git.force-push'))
-    assert.ok(set.rules.some(rule => rule.id === 'secrets.redact-output'))
+  })
+
+  it('loads a pack directory in name order, and a single pack file', async () => {
+    const dir = await loadRules({ cwd: tempDir(), userDir: null, packs: [FIXTURE_RULES] })
+    assert.equal(dir.issues.length, 0, JSON.stringify(dir.issues))
+    assert.deepEqual(dir.files.map(file => basename(file)), ['commands.yaml', 'credentials.yaml'])
+    assert.ok(dir.rules.every(rule => rule.sources[0].layer === 'packs'))
+    assert.ok(dir.rules.some(rule => rule.id === 'fixture.block-shell'))
+    assert.ok(dir.rules.some(rule => rule.id === 'fixture.ask-path'))
+    assert.ok(dir.rules.some(rule => rule.id === 'fixture.redact-output'))
+    const file = await loadRules({ cwd: tempDir(), userDir: null, packs: [join(FIXTURE_RULES, 'credentials.yaml')] })
+    assert.ok(file.rules.length > 0 && file.rules.every(rule => rule.id.startsWith('fixture.')))
+  })
+
+  it('reports a configured pack that does not exist', async () => {
+    const set = await loadRules({ cwd: tempDir(), userDir: null, packs: [join(tempDir(), 'missing.yaml')] })
+    assert.equal(set.rules.length, 0)
+    assert.ok(set.issues.some(issue => issue.level === 'error' && issue.message.includes('cannot read file')))
   })
 
   it('skips a broken YAML file and reports it, keeping the other files', async () => {
@@ -130,7 +151,7 @@ describe('layering', () => {
     assert.deepEqual(set.rules[0].examples?.block, ['git push', 'git push origin main'])
   })
 
-  it('loads layers in order bundled, user, project, local, extra', async () => {
+  it('loads layers in order packs, user, project, local, extra', async () => {
     const options = setup({
       'base.yaml': BASE,
       'user/u.yaml': '- { id: a, action: warn, match: { command: a } }',

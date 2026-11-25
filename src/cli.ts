@@ -1,10 +1,15 @@
 #!/usr/bin/env node
 /** dsh-guard command line: test, explain, lint. @module */
 import { resolve } from 'node:path'
+import { isObserve } from './authoring.ts'
+import { builtinRules } from './builtin.ts'
+import { defaultOptions, protectedPaths } from './core.ts'
 import { evaluate, redact, ruleFires } from './engine.ts'
 import { runExamples } from './examples.ts'
-import { DEFAULT_PACKS, defaultUserDir, loadRules } from './loader.ts'
+import { defaultUserDir, loadRules } from './loader.ts'
+import { defaultLogPath } from './log.ts'
 import { looksCatastrophic } from './regex.ts'
+import { readLogStats } from './stats.ts'
 import { viewOf } from './tools.ts'
 import type { LoadOptions } from './loader.ts'
 import type { Issue, Phase, RuleSet, ToolCall } from './types.ts'
@@ -15,14 +20,17 @@ Commands:
   test                 run every rule's examples; exit 1 on any mismatch
   explain '<json>'     show which rules fire on one tool call
   lint                 check schema, regexes and overrides; exit 1 on errors or warnings
+  stats                observe-mode rules with would-have counts and false-positive candidates
 
 Options:
   --cwd <dir>          project directory (default: current directory)
   --no-user            skip the user layer (~/.dsh-guard)
   --user-dir <dir>     user rule directory
-  --packs <a,b>        bundled packs (default: ${DEFAULT_PACKS.join(',')}); empty for none
+  --packs <a,b>        rule files or directories loaded before the user layer (default: none)
   --rules <file>       extra rule file, loaded last (repeatable)
   --phase <phase>      explain only: pre_tool or post_tool (default: post_tool when the call has output)
+  --log <file>         stats only: decision log (default: ~/.dsh-guard/log.jsonl)
+  --all                stats only: list every rule with hits, not only observe-mode rules
 
 The explain call is {"tool": "bash", "input": {"command": "..."}, "output": "..."}
 or a dsh tool/call record {"name": "bash", "arguments": "{...}"}.`
@@ -35,10 +43,12 @@ interface Args {
   packs: string[]
   extra: string[]
   phase?: Phase
+  log: string
+  all: boolean
 }
 
 function parseArgs(argv: string[]): Args {
-  const args: Args = { positional: [], cwd: process.cwd(), userDir: defaultUserDir(), packs: [...DEFAULT_PACKS], extra: [] }
+  const args: Args = { positional: [], cwd: process.cwd(), userDir: defaultUserDir(), packs: [], extra: [], log: defaultLogPath(), all: false }
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
     const value = (): string => {
@@ -49,8 +59,10 @@ function parseArgs(argv: string[]): Args {
     if (arg === '--cwd') args.cwd = resolve(value())
     else if (arg === '--no-user') args.userDir = null
     else if (arg === '--user-dir') args.userDir = resolve(value())
-    else if (arg === '--packs') args.packs = value().split(',').map(item => item.trim()).filter(item => item !== '')
+    else if (arg === '--packs') args.packs = value().split(',').map(item => item.trim()).filter(item => item !== '').map(item => resolve(item))
     else if (arg === '--rules') args.extra.push(resolve(value()))
+    else if (arg === '--log') args.log = resolve(value())
+    else if (arg === '--all') args.all = true
     else if (arg === '--phase') {
       const phase = value()
       if (phase !== 'pre_tool' && phase !== 'post_tool') throw new Error('--phase must be pre_tool or post_tool')
@@ -63,7 +75,8 @@ function parseArgs(argv: string[]): Args {
 }
 
 function loadOptions(args: Args): LoadOptions {
-  return { cwd: args.cwd, packs: args.packs, userDir: args.userDir, extraFiles: args.extra }
+  const options = { ...defaultOptions(), cwd: args.cwd, userDir: args.userDir ?? '', packs: args.packs, extraRuleFiles: args.extra, logPath: args.log }
+  return { cwd: args.cwd, packs: args.packs, userDir: args.userDir, extraFiles: args.extra, builtin: builtinRules(protectedPaths(options)) }
 }
 
 function printIssues(issues: readonly Issue[]): void {
@@ -173,12 +186,47 @@ async function cmdLint(args: Args): Promise<number> {
   return errors > 0 || warnings > 0 ? 1 : 0
 }
 
+async function cmdStats(args: Args): Promise<number> {
+  const set = await loadRules(loadOptions(args))
+  const stats = readLogStats(args.log)
+  const observe = set.rules.filter(isObserve)
+  console.log(`Observe-mode rules (action warn with promote_to), from ${args.log}:`)
+  if (observe.length === 0) console.log('  none')
+  for (const rule of observe) {
+    const stat = stats.get(rule.id)
+    const hits = stat?.verdicts.warn ?? 0
+    const candidates = stat?.falsePositives ?? []
+    console.log(`  ${rule.id} (${rule.sources[0].layer}, ${rule.sources[rule.sources.length - 1].file})`)
+    console.log(`    would have ${rule.promote_to === 'block' ? 'blocked' : rule.promote_to === 'ask' ? 'asked on' : 'redacted'} ${hits} call(s); false-positive candidates (overridden calls): ${stat?.overrides ?? 0}`)
+    for (const candidate of candidates.slice(-5)) console.log(`      ${candidate.time} ${candidate.summary} (reason: ${candidate.reason})`)
+    if (hits > 0 && (stat?.overrides ?? 0) === 0) {
+      console.log(`    suggestion: promote to ${rule.promote_to}; ask the agent (guard_apply op modify, action ${rule.promote_to}) or edit the rule. dsh-guard never promotes by itself.`)
+    } else if (hits === 0) {
+      console.log('    suggestion: keep observing; no hits yet.')
+    } else {
+      console.log('    suggestion: review the overridden calls and narrow the rule before promoting.')
+    }
+  }
+  if (args.all) {
+    console.log('All rules with log records:')
+    for (const rule of set.all) {
+      const stat = stats.get(rule.id)
+      if (stat === undefined) continue
+      const verdicts = Object.entries(stat.verdicts).map(([verdict, count]) => `${verdict} ${count}`).join(', ')
+      console.log(`  ${rule.id}: ${verdicts}`)
+    }
+  }
+  console.log(`dsh-guard stats: ${observe.length} observe-mode rules, ${stats.size} rules with log records`)
+  return 0
+}
+
 async function main(): Promise<number> {
   const args = parseArgs(process.argv.slice(2))
   switch (args.command) {
     case 'test': return cmdTest(args)
     case 'explain': return cmdExplain(args)
     case 'lint': return cmdLint(args)
+    case 'stats': return cmdStats(args)
     case undefined:
     case 'help':
       console.log(USAGE)

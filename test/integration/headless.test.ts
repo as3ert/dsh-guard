@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { before, describe, it } from 'node:test'
-import { FAKE_KEY, runHeadless } from './run-headless.ts'
+import { FAKE_KEY, GUARD_RULES, runHeadless } from './run-headless.ts'
 import type { HeadlessRun } from './run-headless.ts'
 
 describe('dsh headless with dsh-guard and a scripted model', { timeout: 300_000 }, () => {
@@ -11,7 +11,8 @@ describe('dsh headless with dsh-guard and a scripted model', { timeout: 300_000 
   const seenByModel = (index: number): string => JSON.stringify(run.requests[index]?.messages ?? [])
 
   before(() => {
-    run = runHeadless()
+    // The integration rules plus the credentials fixture rules, loaded through the opt-in `packs` key.
+    run = runHeadless({ rules: GUARD_RULES })
   })
 
   it('boots, runs the script and completes', () => {
@@ -40,7 +41,7 @@ describe('dsh headless with dsh-guard and a scripted model', { timeout: 300_000 
   it('masks a fake secret in tool output before the model sees it', () => {
     const read = results().call_2
     assert.equal(read.status, 'completed')
-    assert.match(read.result as string, /DEEPSEEK_API_KEY=\[REDACTED:secrets\.redact-output\]/)
+    assert.match(read.result as string, /DEEPSEEK_API_KEY=\[REDACTED:fixture\.redact-output\]/)
     for (let index = 0; index < run.requests.length; index++) assert.ok(!seenByModel(index).includes(FAKE_KEY))
   })
 
@@ -53,7 +54,7 @@ describe('dsh headless with dsh-guard and a scripted model', { timeout: 300_000 
 
   it('logs every decision with the session directory', () => {
     const verdicts = run.log.map(record => `${record.rule}:${record.verdict}`)
-    assert.deepEqual(verdicts, ['it.block:block', 'it.warn:warn', 'secrets.redact-output:redact', 'it.ask:ask', '-:ask-denied'])
+    assert.deepEqual(verdicts, ['it.block:block', 'it.warn:warn', 'fixture.redact-output:redact', 'it.ask:ask', '-:ask-denied'])
     for (const record of run.log) assert.match(record.cwd as string, /workspace$/)
   })
 })

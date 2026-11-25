@@ -1,7 +1,7 @@
 {
   "name": "dsh-guard",
   "version": "0.1.0",
-  "description": "Declarative guard rules for DeepSeek Harness tool calls: block, ask, warn and redact",
+  "description": "Declarative guard rules for DeepSeek Harness tool calls: block, ask, warn and redact. Ships no rules; users describe their own.",
   "private": true,
   "type": "module",
   "license": "MIT",
@@ -19,19 +19,23 @@
   },
   "files": [
     "dist",
-    "packs",
+    "guidance",
+    "cordis.patch.yml",
     "README.md"
   ],
   "engines": {
-    "node": ">=24.9.0"
+    "node": ">=24.9.0",
+    "dsh": "0.2.2-rc.5"
   },
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
-    "test": "node --test test/loader.test.ts test/engine.test.ts test/plugin.test.ts",
-    "test:integration": "npm run build && node --test test/integration/headless.test.ts",
-    "guard:test": "node src/cli.ts test --no-user",
-    "guard:lint": "node src/cli.ts lint --no-user"
+    "test": "node --test test/loader.test.ts test/engine.test.ts test/plugin.test.ts test/authoring.test.ts test/self-protect.test.ts test/plugin-tools.test.ts",
+    "test:integration": "npm run build && node --test --test-concurrency=1 test/integration/headless.test.ts test/integration/authoring.test.ts",
+    "guard:test": "node src/cli.ts test --no-user --packs test/fixtures/rules",
+    "guard:lint": "node src/cli.ts lint --no-user --packs test/fixtures/rules",
+    "guard:stats": "node src/cli.ts stats",
+    "export": "node scripts/export.ts"
   },
   "dependencies": {
     "yaml": "2.9.1"
@@ -46,5 +50,10 @@
     "@deepseek-ai/dsh": "0.2.2-rc.5",
     "@types/node": "24.19.3",
     "typescript": "5.9.3"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
   }
 }

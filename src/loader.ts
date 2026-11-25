@@ -1,36 +1,36 @@
 /** Load and layer rule files. @module */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, isAbsolute, join, resolve } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parse as parseYaml } from 'yaml'
 import { compilePattern } from './regex.ts'
+import { RESERVED_PREFIX } from './builtin.ts'
 import { ACTION_RANK, checkEntry, completeSpec } from './schema.ts'
 import type { PartialSpec } from './schema.ts'
 import type { CheckFn, FieldMatcher, Issue, LayerName, Rule, RuleSet, RuleSource, RuleSpec } from './types.ts'
-
-/** Directory of the bundled packs shipped with this package. */
-export const BUNDLED_PACKS_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..', 'packs')
-
-/** Default bundled packs. */
-export const DEFAULT_PACKS = ['safety', 'git', 'secrets']
 
 /** Options selecting the rule layers. */
 export interface LoadOptions {
   /** Project directory whose `.dsh-guard/` and `.dsh-guard.local/` are read. */
   cwd: string
-  /** Bundled packs to load by name; an empty list loads none. */
+  /**
+   * Rule packs loaded first, before the user layer: rule files or directories
+   * of rule files, given by the user. The plugin ships no packs; default none.
+   */
   packs?: readonly string[]
-  /** Directory holding the bundled packs. */
-  packsDir?: string
   /** User rule directory; `null` skips the user layer. Default `~/.dsh-guard`. */
   userDir?: string | null
   /** Extra rule files loaded last, after the local layer. */
   extraFiles?: readonly string[]
   /** Layers whose files may disable an earlier rule. Default user and local. */
   disableLayers?: readonly LayerName[]
-  /** Layers whose files may name `check:` hooks, which run code. Default bundled, user, local, extra. */
+  /** Layers whose files may name `check:` hooks, which run code. Default packs, user, local, extra. */
   checkLayers?: readonly LayerName[]
+  /** File contents that replace (or add) files on disk, keyed by absolute path; used to simulate a draft. */
+  virtualFiles?: Readonly<Record<string, string>>
+  /** Built-in rules appended after every layer; they cannot be overridden or disabled. */
+  builtin?: readonly Rule[]
 }
 
 /** Default user rule directory. */
@@ -38,43 +38,54 @@ export function defaultUserDir(): string {
   return process.env.DSH_GUARD_HOME ?? join(homedir(), '.dsh-guard')
 }
 
-/** Rule files of one directory, sorted by name. */
-function yamlFiles(dir: string): string[] {
-  let names: string[]
+/** Whether a path is an existing directory. */
+function isDirectory(path: string): boolean {
   try {
-    if (!statSync(dir).isDirectory()) return []
-    names = readdirSync(dir)
+    return statSync(path).isDirectory()
   } catch {
-    return []
+    return false
   }
-  return names.filter(name => /\.ya?ml$/i.test(name)).sort().map(name => join(dir, name))
+}
+
+/** Rule files of one directory, sorted by name, including virtual files placed there. */
+function yamlFiles(dir: string, virtualFiles?: Readonly<Record<string, string>>): string[] {
+  // A missing directory contributes only its virtual files.
+  const names: string[] = isDirectory(dir) ? readdirSync(dir) : []
+  const wanted = new Set(names.filter(name => /\.ya?ml$/i.test(name)))
+  for (const file of Object.keys(virtualFiles ?? {})) {
+    if (resolve(dirname(file)) === resolve(dir) && /\.ya?ml$/i.test(file)) wanted.add(basename(file))
+  }
+  return [...wanted].sort().map(name => join(dir, name))
 }
 
 /**
  * Rule files in load order with their layer.
  * @param options - layer selection.
- * @returns files, bundled first and extra last.
+ * @returns files, packs first and extra last.
  */
 export function layerFiles(options: LoadOptions): { layer: LayerName, file: string }[] {
   const files: { layer: LayerName, file: string }[] = []
-  const packsDir = options.packsDir ?? BUNDLED_PACKS_DIR
-  for (const pack of options.packs ?? DEFAULT_PACKS) {
-    const file = isAbsolute(pack) ? pack : join(packsDir, `${pack}.yaml`)
-    files.push({ layer: 'bundled', file })
+  for (const pack of options.packs ?? []) {
+    const path = resolve(pack)
+    if (isDirectory(path)) for (const file of yamlFiles(path, options.virtualFiles)) files.push({ layer: 'packs', file })
+    else files.push({ layer: 'packs', file: path })
   }
   const userDir = options.userDir === undefined ? defaultUserDir() : options.userDir
-  if (userDir !== null) for (const file of yamlFiles(userDir)) files.push({ layer: 'user', file })
-  for (const file of yamlFiles(join(options.cwd, '.dsh-guard'))) files.push({ layer: 'project', file })
-  for (const file of yamlFiles(join(options.cwd, '.dsh-guard.local'))) files.push({ layer: 'local', file })
+  if (userDir !== null) for (const file of yamlFiles(userDir, options.virtualFiles)) files.push({ layer: 'user', file })
+  for (const file of yamlFiles(join(options.cwd, '.dsh-guard'), options.virtualFiles)) files.push({ layer: 'project', file })
+  for (const file of yamlFiles(join(options.cwd, '.dsh-guard.local'), options.virtualFiles)) files.push({ layer: 'local', file })
   for (const file of options.extraFiles ?? []) files.push({ layer: 'extra', file: resolve(file) })
   return files
 }
 
 /** Parse one file into its list of entries. */
-function readEntries(file: string): { entries?: unknown[], error?: string } {
+function readEntries(file: string, virtualFiles?: Readonly<Record<string, string>>): { entries?: unknown[], error?: string } {
   let text: string
+  const virtual = virtualFiles === undefined
+    ? undefined
+    : Object.entries(virtualFiles).find(([path]) => resolve(path) === resolve(file))?.[1]
   try {
-    text = readFileSync(file, 'utf8')
+    text = virtual ?? readFileSync(file, 'utf8')
   } catch (error) {
     return { error: `cannot read file: ${(error as Error).message}` }
   }
@@ -151,11 +162,11 @@ export async function loadRules(options: LoadOptions): Promise<RuleSet> {
   const entries = new Map<string, Entry>()
   const files: string[] = []
   const disableLayers = new Set<LayerName>(options.disableLayers ?? ['user', 'local'])
-  const checkLayers = new Set<LayerName>(options.checkLayers ?? ['bundled', 'user', 'local', 'extra'])
+  const checkLayers = new Set<LayerName>(options.checkLayers ?? ['packs', 'user', 'local', 'extra'])
 
   for (const { layer, file } of layerFiles(options)) {
     files.push(file)
-    const { entries: raws, error } = readEntries(file)
+    const { entries: raws, error } = readEntries(file, options.virtualFiles)
     if (error !== undefined || raws === undefined) {
       issues.push({ level: 'error', file, message: `file skipped: ${error}` })
       continue
@@ -168,6 +179,10 @@ export async function loadRules(options: LoadOptions): Promise<RuleSet> {
         continue
       }
       const id = stated.id
+      if (id.startsWith(RESERVED_PREFIX)) {
+        issues.push({ level: 'warning', file, id, message: `rule skipped: ids starting with \`${RESERVED_PREFIX}\` are reserved for built-in rules, which cannot be overridden or disabled` })
+        continue
+      }
       const source: RuleSource = { layer, file }
       const previous = entries.get(id)
       if (stated.check !== undefined && !checkLayers.has(layer)) {
@@ -263,5 +278,6 @@ export async function loadRules(options: LoadOptions): Promise<RuleSet> {
     }
     all.push({ ...entry.spec, sources: entry.sources, matchers, ...checkFn !== undefined ? { checkFn } : {} })
   }
+  all.push(...options.builtin ?? [])
   return { rules: all.filter(rule => rule.disabled !== true), all, issues, files }
 }
