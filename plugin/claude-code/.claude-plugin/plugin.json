@@ -1,5 +1,5 @@
 {
-  "name": "dsh-guard",
+  "name": "cc-guard",
   "version": "0.1.1",
   "description": "Declarative guard rules for Claude Code tool calls: block, ask (as a block lifted in the chat), warn and redact. Ships no rules; users describe their own.",
   "license": "MIT",

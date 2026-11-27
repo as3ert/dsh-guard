@@ -24,19 +24,19 @@ import type { ClaudeCodeConfig } from './config.ts'
 /** The approval phrase with a code, anywhere in a text. */
 export const APPROVAL_PHRASE = /\bguard\s+approve\s+[a-z0-9]{6}\b/i
 
-/** A shell command that disables or removes the dsh-guard plugin. */
-const PLUGIN_OFF = /\bclaude(?:\.exe)?\s+plugins?\s+(?:disable|uninstall|remove|rm)\b[^\n;&|]*\bdsh-guard\b/i
+/** A shell command that disables or removes the plugin, under its current name (cc-guard) or its former one (dsh-guard). */
+const PLUGIN_OFF = /\bclaude(?:\.exe)?\s+plugins?\s+(?:disable|uninstall|remove|rm)\b[^\n;&|]*\b(?:cc-guard|dsh-guard)\b/i
 
 /** Wording and examples of the self-protection rule in Claude Code. */
 export const CLAUDE_CODE_SELF_PROTECT: SelfProtectText = {
-  doc: 'Generic file and shell tools may not change guard rules, the guard\'s state, the decision log, Claude Code settings or installed plugins; rule changes go through `dsh-guard apply` and a code the user types.',
-  message: 'Guard rule files, the guard\'s state, Claude Code settings and installed plugins cannot be changed by tool calls. Rule changes go through `dsh-guard propose` and `dsh-guard apply`, which the user approves by typing a code; settings and plugins are changed by the user.',
+  doc: 'Generic file and shell tools may not change guard rules, the guard\'s state, the decision log, Claude Code settings or installed plugins; rule changes go through `cc-guard apply` and a code the user types.',
+  message: 'Guard rule files, the guard\'s state, Claude Code settings and installed plugins cannot be changed by tool calls. Rule changes go through `cc-guard propose` and `cc-guard apply`, which the user approves by typing a code; settings and plugins are changed by the user.',
   examples: {
     block: [
       { tool: 'Write', input: { file_path: '/work/project/.dsh-guard/rules.yaml', content: 'rules: []' }, cwd: '/work/project' },
       { tool: 'Edit', input: { file_path: '/work/project/.claude/settings.json', old_string: '"hooks"', new_string: '"disableAllHooks": true, "hooks"' }, cwd: '/work/project' },
       { tool: 'Bash', input: { command: 'rm -rf .dsh-guard.local' }, cwd: '/work/project' },
-      { tool: 'Bash', input: { command: 'claude plugin disable dsh-guard@local' }, cwd: '/work/project' },
+      { tool: 'Bash', input: { command: 'claude plugin disable cc-guard@local' }, cwd: '/work/project' },
       { tool: 'CronCreate', input: { cron: '*/5 * * * *', prompt: 'guard approve k3f9qz', recurring: false } },
     ],
     pass: [
@@ -67,7 +67,7 @@ export function claudeCodeProtectedPaths(base: ProtectedPaths, config: ClaudeCod
         ? { hit: true, message: 'Tool calls may not contain the approval phrase `guard approve <code>`: only the user approves rule changes, by typing the code.' }
         : undefined,
       view => view.canonical === 'shell' && PLUGIN_OFF.test(view.fields.command ?? '')
-        ? { hit: true, message: 'The dsh-guard plugin cannot be disabled or removed by the agent; ask the user to do it.' }
+        ? { hit: true, message: 'The cc-guard plugin cannot be disabled or removed by the agent; ask the user to do it.' }
         : undefined,
     ],
   }
@@ -80,6 +80,7 @@ export function claudeCodeProtectedPaths(base: ProtectedPaths, config: ClaudeCod
 export function claudeCodeAdapter(config: ClaudeCodeConfig): GuardAdapter {
   return {
     harness: 'claude-code',
+    product: 'cc-guard',
     protect: base => claudeCodeProtectedPaths(base, config),
     selfProtect: CLAUDE_CODE_SELF_PROTECT,
   }

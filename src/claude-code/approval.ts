@@ -1,7 +1,7 @@
 /**
  * Rule-change approval by a code the user types, without a popup.
  *
- * 1. `dsh-guard apply` (run by Claude through Bash) drafts, tests and replays
+ * 1. `cc-guard apply` (run by Claude through Bash) drafts, tests and replays
  *    the change and stores it as a pending entry in the state directory; it
  *    prints the entry id, never a code.
  * 2. The PostToolUse hook of that Bash call creates a random code, keeps only
@@ -29,8 +29,8 @@ export const PENDING_TTL_MS = 30 * 60 * 1000
 export const ISSUE_WINDOW_MS = 5 * 60 * 1000
 /** A prompt that approves: the whole trimmed prompt. */
 export const APPROVE_PROMPT = /^guard\s+approve\s+([a-z0-9]{6})$/i
-/** The line `dsh-guard apply` prints for a stored entry. */
-export const PENDING_MARKER = /\bdsh-guard pending change ([0-9a-f]{12})\b/
+/** The line `cc-guard apply` prints for a stored entry. */
+export const PENDING_MARKER = /\bcc-guard pending change ([0-9a-f]{12})\b/
 
 /** One stored change awaiting approval. */
 export interface PendingEntry {
@@ -135,7 +135,7 @@ export function issueCode(stateDir: string, id: string, now = Date.now()): { cod
   const entry = readEntry(file)
   if (entry === undefined) return { reason: 'no such pending change' }
   if (entry.codeHash !== undefined) return { reason: 'a code was already issued for this change' }
-  if (now - entry.created > ISSUE_WINDOW_MS) return { reason: 'the pending change is too old; run dsh-guard apply again' }
+  if (now - entry.created > ISSUE_WINDOW_MS) return { reason: 'the pending change is too old; run cc-guard apply again' }
   const code = newCode()
   const salt = randomBytes(8).toString('hex')
   const updated: PendingEntry = { ...entry, salt, codeHash: codeHash(salt, code), issued: now }
@@ -167,7 +167,7 @@ export async function applyApproved(core: GuardCore, entry: PendingEntry): Promi
   const draft = await authoring.draft(entry.request, entry.cwd)
   if (!draft.ok) return { applied: false, message: `Not applied: the change no longer drafts cleanly: ${draft.problems.join('; ')}` }
   if (sha256(draft.fileText ?? '') !== entry.fileTextHash || draft.file !== entry.file) {
-    return { applied: false, message: `Not applied: ${draft.file} changed since dsh-guard apply; run dsh-guard propose and dsh-guard apply again.` }
+    return { applied: false, message: `Not applied: ${draft.file} changed since cc-guard apply; run cc-guard propose and cc-guard apply again.` }
   }
   const result = await authoring.apply(entry.request, entry.cwd, async () => ({ calls: [], sessions: 0 }), async () => 'allowed-once', 'prompt')
   await core.log.flush()

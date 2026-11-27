@@ -7,7 +7,7 @@
  * Builds the Claude Code plugin release:
  *
  * 1. removes `dist/` and rebuilds it with the checkout's TypeScript;
- * 2. assembles `<dir>/dsh-guard-claude-code-<version>/`: the plugin files of
+ * 2. assembles `<dir>/cc-guard-<version>/`: the plugin files of
  *    `plugin/claude-code/` (manifest, hooks, skill, `bin/` launchers), the
  *    compiled `dist/core/` and `dist/claude-code/` (JavaScript only), the
  *    runtime dependency `yaml` in `node_modules/`, a minimal `package.json`
@@ -18,7 +18,7 @@
  *    call instead of letting it pass;
  * 4. scans the folder like the dsh export (absolute home paths, email
  *    addresses, private patterns, no YAML) and aborts on a finding;
- * 5. writes `<dir>/dsh-guard-claude-code-<version>.zip` (one top-level folder)
+ * 5. writes `<dir>/cc-guard-<version>.zip` (one top-level folder)
  *    and `<dir>/.claude-plugin/marketplace.json`, so `<dir>` can be added as
  *    a local marketplace and the folder can be passed to `claude --plugin-dir`.
  *
@@ -65,14 +65,14 @@ export function failClosedHooks(text: string): string {
 function main(): number {
   const { out, failClosed, rest } = splitArgs(process.argv.slice(2))
   const root = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { version: string, dependencies?: Record<string, string> }
-  const folder = `dsh-guard-claude-code-${root.version}`
+  const folder = `cc-guard-${root.version}`
   const tree = join(out, folder)
   if (existsSync(tree)) throw new Error(`${tree} exists; choose an empty --out directory`)
   build()
   mkdirSync(tree, { recursive: true })
   cpSync(PLUGIN, tree, { recursive: true })
   // A checkout with CRLF conversion would break the shebang of the POSIX launcher.
-  const launcher = join(tree, 'bin', 'dsh-guard')
+  const launcher = join(tree, 'bin', 'cc-guard')
   writeFileSync(launcher, readFileSync(launcher, 'utf8').replaceAll('\r\n', '\n'))
   const manifestFile = join(tree, '.claude-plugin', 'plugin.json')
   const manifest = JSON.parse(readFileSync(manifestFile, 'utf8')) as Record<string, unknown>
@@ -88,33 +88,33 @@ function main(): number {
     cpSync(join(REPO, 'node_modules', name), join(tree, 'node_modules', name), { recursive: true })
     vendored.push(`node_modules/${name}`)
   }
-  writeFileSync(join(tree, 'package.json'), `${JSON.stringify({ name: 'dsh-guard-claude-code', version: root.version, private: true, type: 'module', license: 'MIT', dependencies: root.dependencies ?? {} }, null, 2)}\n`)
+  writeFileSync(join(tree, 'package.json'), `${JSON.stringify({ name: 'cc-guard', version: root.version, private: true, type: 'module', license: 'MIT', dependencies: root.dependencies ?? {} }, null, 2)}\n`)
   for (const file of ['README.md', 'LICENSE']) cpSync(join(REPO, file), join(tree, file))
-  for (const required of ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'skills/guard-authoring/SKILL.md', 'bin/dsh-guard', 'bin/dsh-guard.cmd', 'dist/claude-code/hook.js', 'dist/claude-code/cli.js', 'dist/core/engine.js', 'node_modules/yaml/package.json']) {
+  for (const required of ['.claude-plugin/plugin.json', 'hooks/hooks.json', 'skills/guard-authoring/SKILL.md', 'bin/cc-guard', 'bin/cc-guard.cmd', 'dist/claude-code/hook.js', 'dist/claude-code/cli.js', 'dist/core/engine.js', 'node_modules/yaml/package.json']) {
     if (!existsSync(join(tree, required))) throw new Error(`the release lacks ${required}`)
   }
   const leftovers = scanTree(tree, parseArgs(rest), vendored)
   if (leftovers > 0) {
-    console.error(`dsh-guard pack: the scan found ${leftovers} leftover(s); the folder ${tree} is kept for inspection and no zip was written`)
+    console.error(`cc-guard pack: the scan found ${leftovers} leftover(s); the folder ${tree} is kept for inspection and no zip was written`)
     return 1
   }
   mkdirSync(join(out, '.claude-plugin'), { recursive: true })
   writeFileSync(join(out, '.claude-plugin', 'marketplace.json'), `${JSON.stringify({
-    name: 'dsh-guard-local',
-    owner: { name: 'dsh-guard' },
-    plugins: [{ name: 'dsh-guard', source: `./${folder}`, description: manifest.description, version: root.version }],
+    name: 'cc-guard-local',
+    owner: { name: 'cc-guard' },
+    plugins: [{ name: 'cc-guard', source: `./${folder}`, description: manifest.description, version: root.version }],
   }, null, 2)}\n`)
   const files = listFiles(tree)
   const dirs = new Set<string>([`${folder}/`])
   for (const path of files) for (let dir = posix.dirname(path); dir !== '.'; dir = posix.dirname(dir)) dirs.add(`${folder}/${dir}/`)
   const entries: ZipEntry[] = [
     ...[...dirs].sort().map(name => ({ name })),
-    ...files.map(path => ({ name: `${folder}/${path}`, data: readFileSync(join(tree, path)), executable: path === 'bin/dsh-guard' })),
+    ...files.map(path => ({ name: `${folder}/${path}`, data: readFileSync(join(tree, path)), executable: path === 'bin/cc-guard' })),
   ]
   const zip = join(out, `${folder}.zip`)
   const size = writeZip(zip, entries, headTime())
   const unpacked = files.reduce((sum, path) => sum + statSync(join(tree, path)).size, 0)
-  console.log(`dsh-guard pack: ${tree} (${files.length} files, ${unpacked} bytes${failClosed ? ', fail-closed' : ''}), ${zip} (${size} bytes), marketplace ${join(out, '.claude-plugin', 'marketplace.json')}`)
+  console.log(`cc-guard pack: ${tree} (${files.length} files, ${unpacked} bytes${failClosed ? ', fail-closed' : ''}), ${zip} (${size} bytes), marketplace ${join(out, '.claude-plugin', 'marketplace.json')}`)
   return 0
 }
 
@@ -122,7 +122,7 @@ if (import.meta.main) {
   try {
     process.exitCode = main()
   } catch (error) {
-    console.error(`dsh-guard pack: ${(error as Error).message}`)
+    console.error(`cc-guard pack: ${(error as Error).message}`)
     process.exitCode = 2
   }
 }

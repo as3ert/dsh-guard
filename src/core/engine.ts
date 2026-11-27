@@ -149,9 +149,9 @@ export function redact(text: string, hits: readonly Hit[]): { text: string, coun
 }
 
 /** Model-facing text for a block or ask hit. */
-export function denialText(hits: readonly Hit[], action: Action): string {
+export function denialText(hits: readonly Hit[], action: Action, product = 'dsh-guard'): string {
   const lines = hits.filter(hit => hit.rule.action === action).map(hit => `[${hit.rule.id}] ${hit.message}`)
-  const head = action === 'block' ? 'Blocked by dsh-guard' : action === 'ask' ? 'dsh-guard asks for confirmation' : 'dsh-guard'
+  const head = action === 'block' ? `Blocked by ${product}` : action === 'ask' ? `${product} asks for confirmation` : product
   const overridable = hits.some(hit => hit.rule.action === action && hit.rule.override)
   const tail = action === 'block' && overridable
     ? '\nOnly if the user explicitly asked for this exception, append `# guard: allow <reason>` to the shell command.'
@@ -166,10 +166,10 @@ export function denialText(hits: readonly Hit[], action: Action): string {
  * @param hits - hits of the verdict.
  * @param shell - whether the call is a shell command (only those take the comment).
  */
-export function askBlockText(hits: readonly Hit[], shell: boolean): string {
+export function askBlockText(hits: readonly Hit[], shell: boolean, product = 'dsh-guard'): string {
   const lines = hits.filter(hit => hit.rule.action === 'ask').map(hit => `[${hit.rule.id}] ${hit.message}`)
   const tail = shell
     ? 'Ask the user in the chat whether to run this command. Only after the user agrees, run the same command again with `# guard: allow <the user\'s reason>` appended.'
     : 'This is not a shell command, so it cannot be repeated with an override comment; ask the user in the chat how to proceed.'
-  return `dsh-guard needs the user's agreement: ${lines.join('; ')}\n${tail}`
+  return `${product} needs the user's agreement: ${lines.join('; ')}\n${tail}`
 }

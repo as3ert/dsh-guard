@@ -55,7 +55,7 @@ async function onPre(input: HookInput, config: ClaudeCodeConfig): Promise<HookOu
   const outcome = await core.pre(callOf(input), input.tool_use_id, input.session_id)
   await core.log.flush()
   if (outcome.kind === 'deny' || outcome.kind === 'ask') {
-    return context('PreToolUse', outcome.warnings, { permissionDecision: 'deny', permissionDecisionReason: outcome.reason ?? 'Blocked by dsh-guard.' })
+    return context('PreToolUse', outcome.warnings, { permissionDecision: 'deny', permissionDecisionReason: outcome.reason ?? 'Blocked by cc-guard.' })
   }
   return context('PreToolUse', outcome.warnings)
 }
@@ -88,7 +88,7 @@ async function onPost(input: HookInput, config: ClaudeCodeConfig): Promise<HookO
   const extra: Record<string, unknown> = {}
   const notes = [...outcome.warnings]
   if (outcome.kind === 'block') {
-    const message = outcome.feedback ?? 'Blocked by dsh-guard.'
+    const message = outcome.feedback ?? 'Blocked by cc-guard.'
     extra.updatedToolOutput = replaceResponse(response, message)
     out.decision = 'block'
     out.reason = message
@@ -101,7 +101,7 @@ async function onPost(input: HookInput, config: ClaudeCodeConfig): Promise<HookO
         extra.updatedToolOutput = masked.value
       } else {
         out.decision = 'block'
-        out.reason = `dsh-guard: the output matched redact rule(s) ${ids} but could not be masked; treat the matching text as secret and do not repeat, store or use it.`
+        out.reason = `cc-guard: the output matched redact rule(s) ${ids} but could not be masked; treat the matching text as secret and do not repeat, store or use it.`
         core.note(call, ids, 'redact-failed', input.tool_use_id, input.session_id !== undefined ? { session: input.session_id } : {})
       }
     }
@@ -118,8 +118,8 @@ async function onPost(input: HookInput, config: ClaudeCodeConfig): Promise<HookO
     if (marker !== null) {
       const issued = issueCode(config.stateDir, marker[1])
       if (issued.code !== undefined && issued.entry !== undefined) {
-        out.systemMessage = `dsh-guard asks for approval: ${issued.entry.summary.replace(/^dsh-guard: /, '')}\nTo apply this rule change, type exactly:  guard approve ${issued.code}\n(The code is valid for 30 minutes; ignore it to reject the change.)`
-        notes.push('dsh-guard: the approval code for this pending rule change was shown to the user, not to you. Ask the user to type the line shown below the tool call if they agree; you cannot approve it yourself.')
+        out.systemMessage = `cc-guard asks for approval: ${issued.entry.summary.replace(/^cc-guard: /, '')}\nTo apply this rule change, type exactly:  guard approve ${issued.code}\n(The code is valid for 30 minutes; ignore it to reject the change.)`
+        notes.push('cc-guard: the approval code for this pending rule change was shown to the user, not to you. Ask the user to type the line shown below the tool call if they agree; you cannot approve it yourself.')
         core.note(call, '-', 'authoring-pending', input.tool_use_id, { ...input.session_id !== undefined ? { session: input.session_id } : {}, reason: issued.entry.summary })
       }
     }
@@ -137,7 +137,7 @@ async function onPostFailure(input: HookInput, config: ClaudeCodeConfig): Promis
   const hits = [...outcome.redactHits, ...outcome.kind === 'block' ? (outcome.verdict?.hits ?? []).filter(hit => hit.rule.action === 'block') : []]
   if (hits.length > 0) {
     const ids = hits.map(hit => hit.rule.id).join(', ')
-    notes.push(`dsh-guard: the error output of this call matched rule(s) ${ids}, but Claude Code cannot rewrite the output of failed calls; treat the matching text as secret and do not repeat, store or use it.`)
+    notes.push(`cc-guard: the error output of this call matched rule(s) ${ids}, but Claude Code cannot rewrite the output of failed calls; treat the matching text as secret and do not repeat, store or use it.`)
     core.note(call, ids, 'redact-failed', input.tool_use_id, input.session_id !== undefined ? { session: input.session_id } : {})
   }
   await core.log.flush()
@@ -150,16 +150,16 @@ async function onPrompt(input: HookInput, config: ClaudeCodeConfig): Promise<Hoo
   const entry = findByCode(config.stateDir, match[1])
   if (entry === undefined) {
     return {
-      systemMessage: 'dsh-guard: no pending rule change has this code (mistyped, already used, or older than 30 minutes); nothing was written.',
-      ...context('UserPromptSubmit', ['dsh-guard: the user typed an approval code that matches no pending rule change; nothing was written.']),
+      systemMessage: 'cc-guard: no pending rule change has this code (mistyped, already used, or older than 30 minutes); nothing was written.',
+      ...context('UserPromptSubmit', ['cc-guard: the user typed an approval code that matches no pending rule change; nothing was written.']),
     }
   }
   const core = hookCore(config)
   const result = await applyApproved(core, entry)
   removePending(config.stateDir, entry.id)
   return {
-    systemMessage: `dsh-guard: ${result.message}`,
-    ...context('UserPromptSubmit', [`dsh-guard: the user approved the pending rule change (${entry.summary}). ${result.message}`]),
+    systemMessage: `cc-guard: ${result.message}`,
+    ...context('UserPromptSubmit', [`cc-guard: the user approved the pending rule change (${entry.summary}). ${result.message}`]),
   }
 }
 
@@ -173,14 +173,14 @@ async function onSessionStart(input: HookInput, config: ClaudeCodeConfig, env: N
   const out: HookOutput = {}
   if (problems.length > 0) {
     const lines = problems.slice(0, 5).map(issue => `${issue.level}: ${issue.file}${issue.id !== undefined ? ` [${issue.id}]` : ''}: ${issue.message}`)
-    out.systemMessage = `dsh-guard: ${problems.length} problem(s) in the rule files; the affected rules are NOT in force:\n${lines.join('\n')}${problems.length > 5 ? `\n... ${problems.length - 5} more (run dsh-guard lint)` : ''}`
-    notes.push(`dsh-guard: ${problems.length} rule file problem(s); affected rules are not in force. \`dsh-guard lint\` lists them.`)
+    out.systemMessage = `cc-guard: ${problems.length} problem(s) in the rule files; the affected rules are NOT in force:\n${lines.join('\n')}${problems.length > 5 ? `\n... ${problems.length - 5} more (run cc-guard lint)` : ''}`
+    notes.push(`cc-guard: ${problems.length} rule file problem(s); affected rules are not in force. \`cc-guard lint\` lists them.`)
   }
   if (!onlyBuiltin(set.rules)) {
     const observe = rules.filter(isObserve).length
-    notes.push(`dsh-guard is active: ${rules.length} rule(s)${observe > 0 ? `, ${observe} in observe mode` : ''}. Rule changes go through the dsh-guard:guard-authoring skill.`)
+    notes.push(`cc-guard is active: ${rules.length} rule(s)${observe > 0 ? `, ${observe} in observe mode` : ''}. Rule changes go through the cc-guard:guard-authoring skill.`)
     if (rules.some(rule => rule.action === 'redact') && env.CLAUDE_CODE_DISABLE_FILE_MENTIONS !== '1') {
-      notes.push('dsh-guard: redact rules do not see files inserted with @ mentions (CLAUDE_CODE_DISABLE_FILE_MENTIONS is not set).')
+      notes.push('cc-guard: redact rules do not see files inserted with @ mentions (CLAUDE_CODE_DISABLE_FILE_MENTIONS is not set).')
     }
   }
   return { ...out, ...context('SessionStart', notes) ?? {} }
@@ -215,13 +215,13 @@ export function failureOutput(event: string, error: unknown, failMode: 'open' | 
   const message = (error as Error)?.message ?? String(error)
   const name = HOOK_NAMES[event as HookEvent] ?? event
   if (event === 'pre' && failMode === 'closed') {
-    return { hookSpecificOutput: { hookEventName: name, permissionDecision: 'deny', permissionDecisionReason: `Blocked by dsh-guard: internal error (failMode: closed): ${message}` } }
+    return { hookSpecificOutput: { hookEventName: name, permissionDecision: 'deny', permissionDecisionReason: `Blocked by cc-guard: internal error (failMode: closed): ${message}` } }
   }
   const unchecked = event === 'pre' || event === 'post' || event === 'post-failure'
   return {
-    systemMessage: `dsh-guard: internal error in the ${name} hook${unchecked ? '; this call was NOT checked' : ''}: ${message}`,
+    systemMessage: `cc-guard: internal error in the ${name} hook${unchecked ? '; this call was NOT checked' : ''}: ${message}`,
     ...event !== 'session-start' && event !== 'prompt' && HOOK_NAMES[event as HookEvent] !== undefined
-      ? { hookSpecificOutput: { hookEventName: name, additionalContext: `dsh-guard: internal error; this call was not checked by the guard (${message}).` } }
+      ? { hookSpecificOutput: { hookEventName: name, additionalContext: `cc-guard: internal error; this call was not checked by the guard (${message}).` } }
       : {},
   }
 }

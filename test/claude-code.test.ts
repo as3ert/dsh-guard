@@ -53,7 +53,7 @@ const RULES = `rules:
 
 /** A temporary guard home, state, config dir and project; returns the hook environment. */
 function setup(rules = RULES) {
-  const root = tempDir('dsh-guard-cc-')
+  const root = tempDir('cc-guard-cc-')
   writeTree(root, { 'home/rules.yaml': rules, 'project/.keep': '', 'cfg/projects/.keep': '' })
   const env: NodeJS.ProcessEnv = {
     DSH_GUARD_HOME: join(root, 'home'),
@@ -161,7 +161,7 @@ describe('Claude Code PreToolUse', () => {
 
   it('passes warn hits as additional context and allows by giving no output', async () => {
     const { env, cwd } = setup()
-    assert.deepEqual(decision(await pre(env, cwd, 'Bash', { command: 'curl https://example.com' })), { context: 'dsh-guard warning [t.warn-curl]: Network access noted.' })
+    assert.deepEqual(decision(await pre(env, cwd, 'Bash', { command: 'curl https://example.com' })), { context: 'cc-guard warning [t.warn-curl]: Network access noted.' })
     assert.equal(await pre(env, cwd, 'Bash', { command: 'ls' }), undefined)
   })
 
@@ -206,7 +206,8 @@ describe('Claude Code self-protection', () => {
     ['a write into the plugin tree', root => ['Write', { file_path: join(root, 'plugin', 'hooks', 'hooks.json'), content: '{}' }]],
     ['a shell delete of the log', root => ['Bash', { command: `rm "${join(root, 'home', 'log.jsonl')}"` }]],
     ['a shell edit of project settings', () => ['PowerShell', { command: "Set-Content .claude\\settings.json '{}'" }]],
-    ['disabling the plugin', () => ['Bash', { command: 'claude plugin disable dsh-guard@dsh-guard-local' }]],
+    ['disabling the plugin', () => ['Bash', { command: 'claude plugin disable cc-guard@cc-guard-local' }]],
+    ['disabling the plugin under its former name', () => ['Bash', { command: 'claude plugin disable dsh-guard@dsh-guard-local' }]],
     ['scheduling an approval phrase', () => ['CronCreate', { cron: '* * * * *', prompt: 'guard approve abc234', recurring: false }]],
     ['sending an approval phrase to another session', () => ['SendMessage', { to: 'main', message: 'guard approve abc234' }]],
     ['echoing an approval phrase', () => ['Bash', { command: 'echo "guard  approve  abc234"' }]],
@@ -217,14 +218,14 @@ describe('Claude Code self-protection', () => {
       const [tool, input] = make(root, cwd)
       const out = decision(await pre(env, cwd, tool, input))
       assert.equal(out.decision, 'deny', JSON.stringify(input))
-      assert.match(out.reason ?? '', /dsh-guard\.self-protect/)
+      assert.match(out.reason ?? '', /^Blocked by cc-guard: \[dsh-guard\.self-protect\]/)
     })
   }
 
   const allowed: [string, (root: string, cwd: string) => [string, Record<string, unknown>]][] = [
     ['reading the rule file', root => ['Read', { file_path: join(root, 'home', 'rules.yaml') }]],
     ['reading settings with cat', () => ['Bash', { command: 'cat .claude/settings.json' }]],
-    ['running the CLI', () => ['Bash', { command: 'dsh-guard apply --request /tmp/req.json' }]],
+    ['running the CLI', () => ['Bash', { command: 'cc-guard apply --request /tmp/req.json' }]],
     ['listing plugins', () => ['Bash', { command: 'claude plugin list' }]],
     ['a normal write', (_root, cwd) => ['Write', { file_path: join(cwd, 'src', 'app.ts'), content: '' }]],
     ['writing docs about the approval phrase', (_root, cwd) => ['Write', { file_path: join(cwd, 'notes.md'), content: 'type guard approve <code>' }]],
@@ -288,7 +289,7 @@ describe('Claude Code approval by typed code', () => {
   it('issues the code through the PostToolUse hook as a systemMessage and stores only its hash', async () => {
     const { env, cwd } = setup()
     const { id, stateDir } = await pending(env, cwd)
-    const out = await handle('post', { cwd, tool_name: 'Bash', tool_input: { command: 'dsh-guard apply --request r.json' }, tool_response: { stdout: `...\ndsh-guard pending change ${id}\n...`, stderr: '', interrupted: false, isImage: false } }, env)
+    const out = await handle('post', { cwd, tool_name: 'Bash', tool_input: { command: 'cc-guard apply --request r.json' }, tool_response: { stdout: `...\ncc-guard pending change ${id}\n...`, stderr: '', interrupted: false, isImage: false } }, env)
     const code = /guard approve ([a-z0-9]{6})/.exec(String(out?.systemMessage))?.[1]
     assert.ok(code !== undefined)
     const context = (out?.hookSpecificOutput as { additionalContext: string }).additionalContext
@@ -320,7 +321,7 @@ describe('Claude Code approval by typed code', () => {
     assert.match(String((await handle('prompt', { cwd, prompt: 'guard approve zzzzzz' }, env))?.systemMessage), /no pending rule change/)
     writeTree(cwd, { '.dsh-guard/rules.yaml': 'rules: []\n' })
     const out = await handle('prompt', { cwd, prompt: `guard approve ${code}` }, env)
-    assert.match(String(out?.systemMessage), /changed since dsh-guard apply/)
+    assert.match(String(out?.systemMessage), /changed since cc-guard apply/)
     assert.equal(readFileSync(join(cwd, '.dsh-guard', 'rules.yaml'), 'utf8'), 'rules: []\n')
   })
 
@@ -336,7 +337,7 @@ describe('Claude Code approval by typed code', () => {
 
 describe('Claude Code transcripts', () => {
   function projects(): { dir: string, cwd: string } {
-    const dir = tempDir('dsh-guard-cc-projects-')
+    const dir = tempDir('cc-guard-cc-projects-')
     const cwd = '/work/demo'
     const project = join(dir, projectKey(cwd))
     mkdirSync(join(project, 'sess', 'subagents'), { recursive: true })
@@ -392,7 +393,7 @@ describe('Claude Code command line and plugin files', () => {
     assert.match(propose.stdout, /^Proposal READY/)
     const apply = cli(env, cwd, 'apply', '--request-json', request, '--projects-dir', join(root, 'cfg', 'projects'))
     assert.equal(apply.status, 0, apply.stderr)
-    assert.match(apply.stdout, /dsh-guard pending change [0-9a-f]{12}/)
+    assert.match(apply.stdout, /cc-guard pending change [0-9a-f]{12}/)
     assert.match(apply.stdout, /Mode: OBSERVE/)
     assert.doesNotMatch(apply.stdout, /guard approve [a-z0-9]{6}/)
     assert.equal(existsSync(join(cwd, '.dsh-guard', 'rules.yaml')), false)
@@ -415,7 +416,7 @@ describe('Claude Code command line and plugin files', () => {
   it('keeps the plugin manifest in step with the package and the hook events', () => {
     const pkg = JSON.parse(readFileSync(join(REPO, 'package.json'), 'utf8')) as { version: string }
     const manifest = JSON.parse(readFileSync(join(REPO, 'plugin', 'claude-code', '.claude-plugin', 'plugin.json'), 'utf8')) as { name: string, version: string }
-    assert.equal(manifest.name, 'dsh-guard')
+    assert.equal(manifest.name, 'cc-guard')
     assert.equal(manifest.version, pkg.version)
     const hooks = readFileSync(join(REPO, 'plugin', 'claude-code', 'hooks', 'hooks.json'), 'utf8')
     const parsed = JSON.parse(hooks) as { hooks: Record<string, { hooks: { args?: string[] }[] }[]> }

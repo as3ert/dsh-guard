@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
- * dsh-guard command line for Claude Code. Claude runs it through Bash (the
- * plugin's `bin/` puts `dsh-guard` on the Bash tool's PATH); the user can
+ * cc-guard command line for Claude Code. Claude runs it through Bash (the
+ * plugin's `bin/` puts `cc-guard` on the Bash tool's PATH); the user can
  * run it in a terminal. Read-only commands: `test`, `lint`, `explain`,
  * `list`, `stats`, `draft`, `replay`, `propose`. `apply` stores the change
  * as pending; it is written only after the user types the approval code the
@@ -25,7 +25,7 @@ import type { HookInput } from './mapping.ts'
 import { claudeCodeAdapter } from './protect.ts'
 import { transcriptHistory } from './transcript.ts'
 
-const USAGE = `Usage: dsh-guard <command> [options]
+const USAGE = `Usage: cc-guard <command> [options]
 
 Commands:
   list                 rules in force: layers, phase, tools, action, log counts (--layer L, --observe)
@@ -55,9 +55,9 @@ The explain call is a Claude Code hook input {"tool_name": "Bash", "tool_input":
 Configuration comes from the environment (DSH_GUARD_HOME, DSH_GUARD_STATE, DSH_GUARD_LOG, ...; see README).`
 
 const WORDS: ProposeWords = {
-  again: 'run dsh-guard propose again',
-  apply: 'run dsh-guard apply with the same request',
-  hint: 'the rule format and a complete example are in the dsh-guard:guard-authoring skill.',
+  again: 'run cc-guard propose again',
+  apply: 'run cc-guard apply with the same request',
+  hint: 'the rule format and a complete example are in the cc-guard:guard-authoring skill.',
 }
 
 /** A call from a hook input or an engine call. */
@@ -159,7 +159,7 @@ export async function cli(argv: readonly string[], env: NodeJS.ProcessEnv = proc
       return 1
     }
     const replay = result.replay ?? { scanned: 0, sessions: 0, skipped: 0, firing: 0, newlyFiring: 0, noLongerFiring: 0, samples: [], note: result.replayNote ?? 'replay unavailable' }
-    const prompt = approvalPrompt(draft, test, replay).replace(/\nApprove to write the file\.$/, '')
+    const prompt = approvalPrompt(draft, test, replay, 'cc-guard').replace(/\nApprove to write the file\.$/, '')
     if (env.CLAUDECODE === undefined && process.stdin.isTTY === true) {
       console.log(prompt)
       const reader = createInterface({ input: process.stdin, output: process.stdout })
@@ -174,17 +174,17 @@ export async function cli(argv: readonly string[], env: NodeJS.ProcessEnv = proc
       console.log(written.message)
       return written.applied ? 0 : 1
     }
-    const id = createPending(config.stateDir, request, args.cwd, draft, approvalDisplay(draft, test, replay))
+    const id = createPending(config.stateDir, request, args.cwd, draft, approvalDisplay(draft, test, replay, 'cc-guard'))
     console.log([
       prompt,
-      `dsh-guard pending change ${id}`,
-      'Nothing is written yet. The dsh-guard plugin now shows the user an approval code below this tool call (you do not see it).',
+      `cc-guard pending change ${id}`,
+      'Nothing is written yet. The cc-guard plugin now shows the user an approval code below this tool call (you do not see it).',
       'Show the user the rule, the example results and the replay hits above; the change is written only if the user types `guard approve <code>` within 30 minutes. You cannot approve it yourself.',
     ].join('\n'))
     return 0
   }
   return runCli(argv, {
-    name: 'dsh-guard',
+    name: 'cc-guard',
     usage: USAGE,
     defaults: () => ({ userDir: config.options.userDir, log: config.options.logPath }),
     builtin: args => builtinFor(optionsOf(config, args), claudeCodeAdapter(config)),
@@ -192,7 +192,7 @@ export async function cli(argv: readonly string[], env: NodeJS.ProcessEnv = proc
     valueOptions: ['request', 'request-json', 'sessions', 'projects-dir'],
     flagOptions: ['all-projects'],
     commands: { draft: draftCommand, replay: replayCommand, propose: proposeCommand, apply: applyCommand },
-    noRulesText: 'No guard rules exist yet: dsh-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. The user can describe what should be guarded; turn that into a first rule with `dsh-guard propose` and `dsh-guard apply` (see the dsh-guard:guard-authoring skill).',
+    noRulesText: 'No guard rules exist yet: cc-guard ships no rules, so every tool call passes except those the built-in self-protection rule stops. The user can describe what should be guarded; turn that into a first rule with `cc-guard propose` and `cc-guard apply` (see the cc-guard:guard-authoring skill).',
   })
 }
 

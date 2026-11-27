@@ -578,9 +578,9 @@ export function draftText(draft: DraftResult, hint = DSH_FORMAT_HINT): string {
  * @param test - its example run.
  * @param replay - its replay.
  */
-export function approvalPrompt(draft: DraftResult, test: TestResult, replay: ReplayResult): string {
+export function approvalPrompt(draft: DraftResult, test: TestResult, replay: ReplayResult, product = 'dsh-guard'): string {
   const verb = draft.op === 'add' ? 'Add' : draft.op === 'modify' ? 'Change' : draft.entry === undefined ? 'Remove' : 'Disable'
-  const head = `dsh-guard: ${verb} rule ${draft.id} in the ${draft.layer} layer (${draft.file}).`
+  const head = `${product}: ${verb} rule ${draft.id} in the ${draft.layer} layer (${draft.file}).`
   const mode = draft.op === 'add'
     ? draft.effective !== undefined && isObserve(draft.effective)
       ? `Mode: OBSERVE. The rule only warns (action warn); it is meant to become ${draft.effective.promote_to} after review. To enforce it at once, reject and ask for mode enforce.`
@@ -611,14 +611,14 @@ function oneLine(text: string, max: number): string {
  * @param test - its example run.
  * @param replay - its replay.
  */
-export function approvalDisplay(draft: DraftResult, test: TestResult, replay: ReplayResult): string {
+export function approvalDisplay(draft: DraftResult, test: TestResult, replay: ReplayResult, product = 'dsh-guard'): string {
   const verb = draft.op === 'add' ? 'Add' : draft.op === 'modify' ? 'Change' : draft.entry === undefined ? 'Remove' : 'Disable'
   const rule = draft.effective
   const off = draft.op === 'remove' || draft.entry?.disabled === true
   const mode = off || rule === undefined
     ? undefined
     : isObserve(rule) ? `OBSERVE (warns now, ${rule.promote_to} after review)` : `ENFORCE ${rule.action}`
-  const parts = [`dsh-guard: ${verb} rule ${draft.id} · ${draft.layer} layer${mode !== undefined ? ` · ${mode}` : ''}`]
+  const parts = [`${product}: ${verb} rule ${draft.id} · ${draft.layer} layer${mode !== undefined ? ` · ${mode}` : ''}`]
   if (!off && rule !== undefined) {
     const match = Object.entries(rule.match).map(([field, patterns]) => `${field} ${oneLine(patterns.join(' OR '), 160)}`).join('; ')
     parts.push(`Rule: ${rule.when === 'post_tool' ? 'after ' : ''}${rule.tool.join(', ')}${match !== '' ? `; ${match}` : ''}; message "${oneLine(rule.message, 120)}"`)

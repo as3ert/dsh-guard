@@ -47,6 +47,8 @@ export interface GuardOptions {
 export interface GuardAdapter {
   /** Harness name, written to every log record. */
   readonly harness: string
+  /** Product name in user- and model-facing texts; default `dsh-guard`. */
+  readonly product?: string
   /** Harness-specific protected locations added to the generic ones. */
   readonly protect?: (base: ProtectedPaths, options: GuardOptions) => ProtectedPaths
   /** Wording and examples of the self-protection rule. */
@@ -127,11 +129,11 @@ interface CacheEntry {
 /**
  * Notice text for a hit of a warn rule. An observe-mode rule (warn with promote_to) says that the call was allowed and what the rule would do once enforced; a plain warn keeps the rule message.
  */
-export function warningText(hit: { rule: { id: string, promote_to?: string }, message: string }): string {
+export function warningText(hit: { rule: { id: string, promote_to?: string }, message: string }, product = 'dsh-guard'): string {
   const promote = hit.rule.promote_to
-  if (promote === undefined) return `dsh-guard warning [${hit.rule.id}]: ${hit.message}`
+  if (promote === undefined) return `${product} warning [${hit.rule.id}]: ${hit.message}`
   const verb = promote === 'block' ? 'block it' : promote === 'ask' ? 'ask for confirmation' : promote === 'redact' ? 'redact the matching output' : promote
-  return `dsh-guard observe [${hit.rule.id}]: this call was allowed; once enforced the rule would ${verb}: ${hit.message}`
+  return `${product} observe [${hit.rule.id}]: this call was allowed; once enforced the rule would ${verb}: ${hit.message}`
 }
 
 /** Rule cache, evaluation and logging for one host. */
@@ -147,6 +149,9 @@ export class GuardCore {
   readonly report: (level: 'warn' | 'info', message: string) => void
   /** The harness adapter, if any. */
   readonly adapter?: GuardAdapter
+
+  /** Product name in user- and model-facing texts. */
+  get product(): string { return this.adapter?.product ?? 'dsh-guard' }
 
   /**
    * @param options - partial options merged over the defaults.
@@ -190,7 +195,7 @@ export class GuardCore {
 
   private reportIssues(issues: readonly Issue[]): void {
     for (const issue of issues) {
-      const text = `dsh-guard: ${issue.level}: ${issue.file}${issue.id !== undefined ? ` [${issue.id}]` : ''}: ${issue.message}`
+      const text = `${this.product}: ${issue.level}: ${issue.file}${issue.id !== undefined ? ` [${issue.id}]` : ''}: ${issue.message}`
       if (this.reported.has(text)) continue
       this.reported.add(text)
       this.report(issue.level === 'notice' ? 'info' : 'warn', text)
@@ -240,7 +245,7 @@ export class GuardCore {
   private logHits(call: ToolCall, verdict: Verdict, verdictName: (hit: Hit) => string, callId?: string, session?: string): void {
     const view = viewOf(call)
     const base = { tool: call.tool, summary: summarize(view), cwd: call.cwd ?? this.options.cwd, ...callId !== undefined ? { callId } : {}, ...session !== undefined ? { session } : {} }
-    const onError = (error: unknown) => this.report('warn', `dsh-guard: log write failed: ${(error as Error).message}`)
+    const onError = (error: unknown) => this.report('warn', `${this.product}: log write failed: ${(error as Error).message}`)
     for (const hit of verdict.hits) this.log.write({ ...base, rule: hit.rule.id, verdict: verdictName(hit) }, onError)
     for (const hit of verdict.overridden) this.log.write({ ...base, rule: hit.rule.id, verdict: 'override', reason: hit.overrideReason ?? '' }, onError)
     if (verdict.budgetExceeded) this.log.write({ ...base, rule: '-', verdict: `budget-exceeded-${this.options.failMode}` }, onError)
@@ -253,13 +258,13 @@ export class GuardCore {
       ...callId !== undefined ? { callId } : {},
       ...extra.session !== undefined ? { session: extra.session } : {},
       ...extra.reason !== undefined ? { reason: extra.reason } : {},
-    }, error => this.report('warn', `dsh-guard: log write failed: ${(error as Error).message}`))
+    }, error => this.report('warn', `${this.product}: log write failed: ${(error as Error).message}`))
   }
 
   private budgetDenial(verdict: Verdict, checkSize = true): string | undefined {
     if (this.options.failMode !== 'closed') return undefined
-    if (verdict.budgetExceeded) return 'Blocked by dsh-guard: the rule check ran out of its time budget (failMode: closed).'
-    if (checkSize && verdict.truncated) return 'Blocked by dsh-guard: the input exceeds the size the rules can check (failMode: closed).'
+    if (verdict.budgetExceeded) return `Blocked by ${this.product}: the rule check ran out of its time budget (failMode: closed).`
+    if (checkSize && verdict.truncated) return `Blocked by ${this.product}: the input exceeds the size the rules can check (failMode: closed).`
     return undefined
   }
 
@@ -272,13 +277,13 @@ export class GuardCore {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'pre_tool', this.evalOptions())
     this.logHits(call, verdict, hit => hit.rule.action, callId, session)
-    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
+    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(hit => warningText(hit, this.product))
     const failure = this.budgetDenial(verdict)
     if (failure !== undefined) return { kind: 'deny', reason: failure, warnings, verdict }
-    if (verdict.action === 'block') return { kind: 'deny', reason: denialText(verdict.hits, 'block'), warnings, verdict }
+    if (verdict.action === 'block') return { kind: 'deny', reason: denialText(verdict.hits, 'block', this.product), warnings, verdict }
     if (verdict.action === 'ask') {
-      if (this.options.askAsBlock) return { kind: 'deny', reason: askBlockText(verdict.hits, viewOf(call).canonical === 'shell'), warnings, verdict }
-      return { kind: 'ask', reason: denialText(verdict.hits, 'ask'), warnings, verdict }
+      if (this.options.askAsBlock) return { kind: 'deny', reason: askBlockText(verdict.hits, viewOf(call).canonical === 'shell', this.product), warnings, verdict }
+      return { kind: 'ask', reason: denialText(verdict.hits, 'ask', this.product), warnings, verdict }
     }
     return { kind: 'allow', warnings, verdict }
   }
@@ -291,12 +296,12 @@ export class GuardCore {
   guardSync(call: ToolCall): string | undefined {
     const set = this.cachedRuleSet(call.cwd ?? this.options.cwd)
     if (set === undefined) {
-      return this.options.failMode === 'closed' ? 'Blocked by dsh-guard: rules are not loaded yet (failMode: closed).' : undefined
+      return this.options.failMode === 'closed' ? `Blocked by ${this.product}: rules are not loaded yet (failMode: closed).` : undefined
     }
     const verdict = evaluate(set.rules.filter(rule => rule.action === 'block'), call, 'pre_tool', this.evalOptions())
     const failure = this.budgetDenial(verdict)
     if (failure !== undefined) return failure
-    return verdict.action === 'block' ? denialText(verdict.hits, 'block') : undefined
+    return verdict.action === 'block' ? denialText(verdict.hits, 'block', this.product) : undefined
   }
 
   /**
@@ -308,11 +313,11 @@ export class GuardCore {
     const set = await this.ruleSetFor(call.cwd ?? this.options.cwd)
     const verdict = evaluate(set.rules, call, 'post_tool', this.evalOptions())
     this.logHits(call, verdict, hit => hit.rule.action, callId, session)
-    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(warningText)
+    const warnings = verdict.hits.filter(hit => hit.rule.action === 'warn').map(hit => warningText(hit, this.product))
     const redactHits = verdict.hits.filter(hit => hit.rule.action === 'redact')
     const failure = this.budgetDenial(verdict, false)
     if (failure !== undefined) return { kind: 'block', feedback: failure, redactHits, warnings, verdict }
-    if (verdict.action === 'block') return { kind: 'block', feedback: denialText(verdict.hits, 'block'), redactHits, warnings, verdict }
+    if (verdict.action === 'block') return { kind: 'block', feedback: denialText(verdict.hits, 'block', this.product), redactHits, warnings, verdict }
     return { kind: 'accept', redactHits, warnings, verdict }
   }
 

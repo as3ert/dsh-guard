@@ -1,12 +1,12 @@
 {
-  "description": "dsh-guard: checks every tool call against the user's guard rules",
+  "description": "cc-guard: checks every tool call against the user's guard rules",
   "hooks": {
     "SessionStart": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "command -v node >/dev/null 2>&1 || printf '%s' '{\"systemMessage\":\"dsh-guard: node was not found on PATH, so the guard cannot run and tool calls are NOT checked. Install Node.js 24 or later.\"}'",
+            "command": "command -v node >/dev/null 2>&1 || printf '%s' '{\"systemMessage\":\"cc-guard: node was not found on PATH, so the guard cannot run and tool calls are NOT checked. Install Node.js 24 or later.\"}'",
             "timeout": 10
           },
           {
